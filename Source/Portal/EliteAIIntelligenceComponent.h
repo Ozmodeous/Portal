@@ -10,8 +10,10 @@
 #include "Game/ACFTypes.h"
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerController.h"
-#include "PortalDefenseAIController.h"
 #include "EliteAIIntelligenceComponent.generated.h"
+
+// Forward Declarations
+class APortalDefenseAIController; // Forward declaration instead of include
 
 UENUM(BlueprintType)
 enum class EEliteDifficultyLevel : uint8 {
@@ -76,10 +78,6 @@ struct FPlayerBehaviorPattern {
 
     FPlayerBehaviorPattern()
     {
-        RecentPositions.Reserve(50);
-        AttackPositions.Reserve(20);
-        AttackTimings.Reserve(20);
-        DodgeDirections.Reserve(30);
         AverageMovementSpeed = 0.0f;
         PreferredEngagementDistance = 0.0f;
         PreferredDodgeDirection = FVector::ZeroVector;
@@ -91,102 +89,45 @@ struct FPlayerBehaviorPattern {
 };
 
 USTRUCT(BlueprintType)
-struct FEliteTacticalPlan {
+struct FEliteAISettings {
     GENERATED_BODY()
 
-    UPROPERTY(BlueprintReadOnly, Category = "Tactical Plan")
-    TArray<FVector> PlannedPositions;
-
-    UPROPERTY(BlueprintReadOnly, Category = "Tactical Plan")
-    TArray<FGameplayTag> PlannedActions;
-
-    UPROPERTY(BlueprintReadOnly, Category = "Tactical Plan")
-    TArray<float> ActionTimings;
-
-    UPROPERTY(BlueprintReadOnly, Category = "Tactical Plan")
-    FVector PredictedPlayerPosition;
-
-    UPROPERTY(BlueprintReadOnly, Category = "Tactical Plan")
-    float PlanConfidence = 0.0f;
-
-    UPROPERTY(BlueprintReadOnly, Category = "Tactical Plan")
-    float ExecutionStartTime = 0.0f;
-
-    UPROPERTY(BlueprintReadOnly, Category = "Tactical Plan")
-    bool bIsExecuting = false;
-
-    FEliteTacticalPlan()
-    {
-        PlannedPositions.Reserve(10);
-        PlannedActions.Reserve(10);
-        ActionTimings.Reserve(10);
-        PredictedPlayerPosition = FVector::ZeroVector;
-        PlanConfidence = 0.0f;
-        ExecutionStartTime = 0.0f;
-        bIsExecuting = false;
-    }
-};
-
-USTRUCT(BlueprintType)
-struct FEliteDifficultySettings {
-    GENERATED_BODY()
-
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Difficulty Settings")
-    EEliteIntelligenceMode IntelligenceMode = EEliteIntelligenceMode::Reactive;
-
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Difficulty Settings")
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Elite Settings")
     float ReactionTimeMultiplier = 1.0f;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Difficulty Settings")
-    float PredictionAccuracy = 0.0f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Elite Settings")
+    float AccuracyMultiplier = 1.0f;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Difficulty Settings")
-    float PatternLearningSpeed = 0.0f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Elite Settings")
+    float PredictionAccuracy = 0.5f;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Difficulty Settings")
-    float TacticalPlanningDepth = 1.0f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Elite Settings")
+    float AdaptationSpeed = 1.0f;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Difficulty Settings")
-    float DodgePerfection = 0.0f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Elite Settings")
+    bool bCanPredictMovement = true;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Difficulty Settings")
-    float AttackPrediction = 0.0f;
-
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Difficulty Settings")
-    float FlankingIntelligence = 0.0f;
-
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Difficulty Settings")
-    float EnvironmentUsage = 0.0f;
-
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Difficulty Settings")
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Elite Settings")
     bool bCanCounterAdapt = false;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Difficulty Settings")
-    bool bUsesFramePerfectTiming = false;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Elite Settings")
+    bool bUsePsychologicalWarfare = false;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Difficulty Settings")
-    bool bCanManipulatePlayer = false;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Elite Settings")
+    float PatternAnalysisDepth = 10.0f;
 
-    FEliteDifficultySettings()
+    FEliteAISettings()
     {
-        IntelligenceMode = EEliteIntelligenceMode::Reactive;
         ReactionTimeMultiplier = 1.0f;
-        PredictionAccuracy = 0.0f;
-        PatternLearningSpeed = 0.0f;
-        TacticalPlanningDepth = 1.0f;
-        DodgePerfection = 0.0f;
-        AttackPrediction = 0.0f;
-        FlankingIntelligence = 0.0f;
-        EnvironmentUsage = 0.0f;
+        AccuracyMultiplier = 1.0f;
+        PredictionAccuracy = 0.5f;
+        AdaptationSpeed = 1.0f;
+        bCanPredictMovement = true;
         bCanCounterAdapt = false;
-        bUsesFramePerfectTiming = false;
-        bCanManipulatePlayer = false;
+        bUsePsychologicalWarfare = false;
+        PatternAnalysisDepth = 10.0f;
     }
 };
-
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnEliteBehaviorTriggered, FString, BehaviorName, float, Intensity);
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnPlayerPatternDetected, FPlayerBehaviorPattern, DetectedPattern);
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnTacticalPlanExecuted, FEliteTacticalPlan, ExecutedPlan);
 
 UCLASS(ClassGroup = (Custom), meta = (BlueprintSpawnableComponent))
 class PORTAL_API UEliteAIIntelligenceComponent : public UActorComponent {
@@ -198,161 +139,168 @@ public:
 protected:
     virtual void BeginPlay() override;
     virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
-    virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 public:
-    // Core Elite AI Control
+    // Core Elite AI Functions
     UFUNCTION(BlueprintCallable, Category = "Elite AI")
     void SetEliteMode(bool bEnabled);
 
     UFUNCTION(BlueprintCallable, Category = "Elite AI")
-    void SetDifficultyLevel(EEliteDifficultyLevel NewDifficulty);
+    void SetDifficultyLevel(EEliteDifficultyLevel NewLevel);
+
+    UFUNCTION(BlueprintCallable, Category = "Elite AI")
+    void SetIntelligenceMode(EEliteIntelligenceMode NewMode);
 
     UFUNCTION(BlueprintPure, Category = "Elite AI")
     bool IsEliteModeEnabled() const { return bEliteModeEnabled; }
 
     UFUNCTION(BlueprintPure, Category = "Elite AI")
-    EEliteDifficultyLevel GetCurrentDifficulty() const { return CurrentDifficulty; }
+    EEliteDifficultyLevel GetCurrentDifficultyLevel() const { return CurrentDifficultyLevel; }
 
     UFUNCTION(BlueprintPure, Category = "Elite AI")
-    FEliteDifficultySettings GetCurrentSettings() const { return CurrentSettings; }
+    EEliteIntelligenceMode GetCurrentIntelligenceMode() const { return CurrentIntelligenceMode; }
 
-    // Combat Intelligence
-    UFUNCTION(BlueprintCallable, Category = "Elite AI | Combat")
-    bool ShouldDodgeNow(const FVector& ThreatDirection, float ThreatSpeed);
+    // Player Analysis Functions
+    UFUNCTION(BlueprintCallable, Category = "Player Analysis")
+    void StartPlayerTracking(APawn* Player);
 
-    UFUNCTION(BlueprintCallable, Category = "Elite AI | Combat")
-    FVector GetOptimalDodgeDirection(const FVector& ThreatDirection);
+    UFUNCTION(BlueprintCallable, Category = "Player Analysis")
+    void StopPlayerTracking();
 
-    UFUNCTION(BlueprintCallable, Category = "Elite AI | Combat")
-    bool ShouldAttackNow(APawn* Target);
+    UFUNCTION(BlueprintCallable, Category = "Player Analysis")
+    void RecordPlayerPosition(const FVector& Position);
 
-    UFUNCTION(BlueprintCallable, Category = "Elite AI | Combat")
-    FVector PredictPlayerPosition(float PredictionTime);
+    UFUNCTION(BlueprintCallable, Category = "Player Analysis")
+    void RecordPlayerAttack(const FVector& AttackPosition, float Timing);
 
-    UFUNCTION(BlueprintCallable, Category = "Elite AI | Combat")
-    FGameplayTag GetOptimalAttackAction(APawn* Target);
+    UFUNCTION(BlueprintCallable, Category = "Player Analysis")
+    void RecordPlayerDodge(const FVector& DodgeDirection);
 
-    // Tactical Intelligence
-    UFUNCTION(BlueprintCallable, Category = "Elite AI | Tactics")
-    FVector GetOptimalFlankingPosition(APawn* Target);
-
-    UFUNCTION(BlueprintCallable, Category = "Elite AI | Tactics")
-    bool ShouldExecuteTacticalRetreat();
-
-    UFUNCTION(BlueprintCallable, Category = "Elite AI | Tactics")
-    FEliteTacticalPlan GenerateTacticalPlan(APawn* Target);
-
-    UFUNCTION(BlueprintCallable, Category = "Elite AI | Tactics")
-    void ExecuteTacticalPlan(const FEliteTacticalPlan& Plan);
-
-    // Learning and Adaptation
-    UFUNCTION(BlueprintCallable, Category = "Elite AI | Learning")
-    void RecordPlayerAction(APawn* Player, const FVector& ActionPosition, const FString& ActionType);
-
-    UFUNCTION(BlueprintCallable, Category = "Elite AI | Learning")
-    void AnalyzePlayerPatterns();
-
-    UFUNCTION(BlueprintCallable, Category = "Elite AI | Learning")
-    void AdaptToPlayerBehavior();
-
-    UFUNCTION(BlueprintPure, Category = "Elite AI | Learning")
+    UFUNCTION(BlueprintPure, Category = "Player Analysis")
     FPlayerBehaviorPattern GetCurrentPlayerPattern() const { return CurrentPlayerPattern; }
 
+    // Prediction Functions
+    UFUNCTION(BlueprintCallable, Category = "Prediction")
+    FVector PredictPlayerPosition(float PredictionTime = 1.0f);
+
+    UFUNCTION(BlueprintCallable, Category = "Prediction")
+    FVector PredictPlayerMovement(float TimeAhead = 0.5f);
+
+    UFUNCTION(BlueprintCallable, Category = "Prediction")
+    bool ShouldPredictDodge(const FVector& AttackDirection);
+
+    UFUNCTION(BlueprintPure, Category = "Prediction")
+    float GetPredictionConfidence() const { return PredictionConfidence; }
+
+    // Adaptation Functions
+    UFUNCTION(BlueprintCallable, Category = "Adaptation")
+    void AdaptToPlayerBehavior();
+
+    UFUNCTION(BlueprintCallable, Category = "Adaptation")
+    void CounterPlayerStrategy();
+
+    UFUNCTION(BlueprintCallable, Category = "Adaptation")
+    FString GetRecommendedTactic();
+
+    UFUNCTION(BlueprintCallable, Category = "Adaptation")
+    void RecordTacticSuccess(const FString& TacticName, bool bSuccessful);
+
+    // Combat Intelligence
+    UFUNCTION(BlueprintCallable, Category = "Combat Intelligence")
+    float CalculateOptimalEngagementDistance();
+
+    UFUNCTION(BlueprintCallable, Category = "Combat Intelligence")
+    FVector CalculateOptimalAttackPosition(const FVector& PlayerPosition);
+
+    UFUNCTION(BlueprintCallable, Category = "Combat Intelligence")
+    bool ShouldUseFlankingManeuver();
+
+    UFUNCTION(BlueprintCallable, Category = "Combat Intelligence")
+    bool ShouldRetreat();
+
     // Psychological Warfare
-    UFUNCTION(BlueprintCallable, Category = "Elite AI | Psychology")
+    UFUNCTION(BlueprintCallable, Category = "Psychological Warfare")
     void ExecutePsychologicalTactic(const FString& TacticName);
 
-    UFUNCTION(BlueprintCallable, Category = "Elite AI | Psychology")
-    bool ShouldBaitPlayer();
+    UFUNCTION(BlueprintCallable, Category = "Psychological Warfare")
+    void CreateFalsePattern();
 
-    UFUNCTION(BlueprintCallable, Category = "Elite AI | Psychology")
-    FVector GetPlayerBaitPosition();
+    UFUNCTION(BlueprintCallable, Category = "Psychological Warfare")
+    void ExecuteFeint();
 
-    // Events
-    UPROPERTY(BlueprintAssignable, Category = "Elite AI")
-    FOnEliteBehaviorTriggered OnEliteBehaviorTriggered;
+    // Settings and Configuration
+    UFUNCTION(BlueprintCallable, Category = "Configuration")
+    void UpdateEliteSettings();
 
-    UPROPERTY(BlueprintAssignable, Category = "Elite AI")
-    FOnPlayerPatternDetected OnPlayerPatternDetected;
+    UFUNCTION(BlueprintPure, Category = "Configuration")
+    FEliteAISettings GetCurrentSettings() const { return CurrentSettings; }
 
-    UPROPERTY(BlueprintAssignable, Category = "Elite AI")
-    FOnTacticalPlanExecuted OnTacticalPlanExecuted;
+    UFUNCTION(BlueprintCallable, Category = "Configuration")
+    void ResetBehaviorPatterns();
 
 protected:
-    // Configuration
+    // Core Configuration
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Elite AI")
     bool bEliteModeEnabled = false;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Elite AI")
-    EEliteDifficultyLevel CurrentDifficulty = EEliteDifficultyLevel::Disabled;
+    EEliteDifficultyLevel CurrentDifficultyLevel = EEliteDifficultyLevel::Novice;
 
-    UPROPERTY(BlueprintReadOnly, Category = "Elite AI")
-    FEliteDifficultySettings CurrentSettings;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Elite AI")
+    EEliteIntelligenceMode CurrentIntelligenceMode = EEliteIntelligenceMode::Reactive;
 
-    // Pattern Recognition
-    UPROPERTY(BlueprintReadOnly, Category = "Pattern Analysis")
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Elite AI")
+    FEliteAISettings CurrentSettings;
+
+    // Player Tracking
+    UPROPERTY(BlueprintReadOnly, Category = "Player Tracking")
+    TObjectPtr<APawn> TrackedPlayer;
+
+    UPROPERTY(BlueprintReadOnly, Category = "Player Tracking")
     FPlayerBehaviorPattern CurrentPlayerPattern;
 
-    UPROPERTY(BlueprintReadOnly, Category = "Pattern Analysis")
-    TArray<FPlayerBehaviorPattern> HistoricalPatterns;
+    UPROPERTY(BlueprintReadOnly, Category = "Player Tracking")
+    float TrackingStartTime = 0.0f;
 
-    // Tactical Planning
-    UPROPERTY(BlueprintReadOnly, Category = "Tactical Planning")
-    FEliteTacticalPlan CurrentTacticalPlan;
+    UPROPERTY(BlueprintReadOnly, Category = "Player Tracking")
+    bool bIsTrackingPlayer = false;
 
-    UPROPERTY(BlueprintReadOnly, Category = "Tactical Planning")
-    TArray<FEliteTacticalPlan> TacticalPlanHistory;
+    // Prediction Data
+    UPROPERTY(BlueprintReadOnly, Category = "Prediction")
+    FVector CachedPlayerPositionPrediction = FVector::ZeroVector;
 
-    // References
+    UPROPERTY(BlueprintReadOnly, Category = "Prediction")
+    float PredictionConfidence = 0.0f;
+
+    UPROPERTY(BlueprintReadOnly, Category = "Prediction")
+    float LastPredictionTime = 0.0f;
+
+    // Adaptation Data
+    UPROPERTY(BlueprintReadOnly, Category = "Adaptation")
+    TMap<FString, float> TacticSuccessRates;
+
+    UPROPERTY(BlueprintReadOnly, Category = "Adaptation")
+    TArray<FString> RecentTactics;
+
+    UPROPERTY(BlueprintReadOnly, Category = "Adaptation")
+    float AdaptationCooldown = 0.0f;
+
+    // Owner Reference
     UPROPERTY(BlueprintReadOnly, Category = "References")
-    TObjectPtr<AACFAIController> OwnerAIController;
-
-    UPROPERTY(BlueprintReadOnly, Category = "References")
-    TObjectPtr<APawn> TrackedPlayer;
+    TObjectPtr<APortalDefenseAIController> OwnerController;
 
     UPROPERTY(BlueprintReadOnly, Category = "References")
     TObjectPtr<APawn> OwnerPawn;
 
 private:
-    // Internal State
-    float LastAnalysisTime = 0.0f;
-    float LastPredictionTime = 0.0f;
-    float LastTacticalPlanTime = 0.0f;
-    float CombatStartTime = 0.0f;
-    bool bInCombat = false;
-
-    // Frame-perfect timing data
-    TArray<float> RecentFrameTimes;
-    float AverageFrameTime = 16.67f;
-
-    // Prediction caching
-    FVector CachedPlayerPositionPrediction = FVector::ZeroVector;
-    float PredictionCacheTime = 0.0f;
-    float PredictionCacheValidTime = 0.1f;
-
-    // Internal Methods
-    void InitializeDifficultySettings();
-    void UpdateDifficultySettings();
-    void UpdatePlayerTracking();
-    void UpdateCombatState();
-    void UpdateFrameTiming(float DeltaTime);
-
-    FEliteDifficultySettings GetSettingsForDifficulty(EEliteDifficultyLevel Difficulty) const;
-    void ProcessPlayerMovement(APawn* Player);
-    void ProcessPlayerCombatAction(APawn* Player, const FVector& ActionPosition, const FString& ActionType);
-
-    bool CanPredictWithAccuracy(float RequiredAccuracy) const;
-    bool IsFramePerfectTimingRequired() const;
-    float GetCurrentReactionTime() const;
-
-    FVector CalculateAdvancedDodge(const FVector& ThreatDirection, const FVector& ThreatVelocity);
-    FVector CalculateInterceptPosition(APawn* Target, float ProjectileSpeed);
-    FVector CalculateFlankingRoute(APawn* Target, float OptimalDistance);
-
-    void ExecuteCounterAdaptation();
-    void UpdatePsychologicalProfile();
-    bool ShouldUsePsychologicalWarfare() const;
-
-    static TMap<EEliteDifficultyLevel, FEliteDifficultySettings> DifficultyPresets;
+    // Internal Update Functions
+    void UpdatePlayerPattern();
+    void UpdatePredictions();
+    void UpdateAdaptation();
+    void AnalyzePlayerMovement();
+    void AnalyzePlayerCombat();
+    void ApplyDifficultySettings();
+    void CachePredictions();
+    bool IsPlayerBehaviorConsistent() const;
+    float CalculatePatternConfidence() const;
 };

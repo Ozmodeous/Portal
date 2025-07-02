@@ -10,6 +10,7 @@
 #include "GameFramework/PlayerController.h"
 #include "Kismet/GameplayStatics.h"
 #include "Perception/AIPerceptionComponent.h"
+#include "TimerManager.h"
 
 TObjectPtr<UAILODManager> UAILODManager::InstancePtr = nullptr;
 
@@ -99,18 +100,21 @@ void UAILODManager::RegisterAI(AACFAIController* AIController)
     // Check if already registered
     for (const FAILODData& Data : RegisteredAI) {
         if (Data.AIController == AIController) {
-            return;
+            return; // Already registered
         }
     }
 
-    FAILODData NewAIData;
-    NewAIData.AIController = AIController;
-    NewAIData.CurrentLODLevel = EAILODLevel::Standard;
-    NewAIData.DistanceToPlayer = 9999.0f;
-    NewAIData.LODPriority = 1.0f;
-    NewAIData.LastLODUpdateTime = GetWorld()->GetTimeSeconds();
+    // Create new LOD data entry
+    FAILODData NewData;
+    NewData.AIController = AIController;
+    NewData.CurrentLODLevel = EAILODLevel::Standard;
+    NewData.DistanceToPlayer = 9999.0f;
+    NewData.LODPriority = 1.0f;
+    NewData.bInCombat = false;
+    NewData.bIsEngagingPlayer = false;
+    NewData.LastLODUpdateTime = GetWorld()->GetTimeSeconds();
 
-    RegisteredAI.Add(NewAIData);
+    RegisteredAI.Add(NewData);
 
     UE_LOG(LogTemp, Log, TEXT("AI LOD Manager: Registered AI %s (Total: %d)"),
         *AIController->GetName(), RegisteredAI.Num());
@@ -126,6 +130,9 @@ void UAILODManager::UnregisterAI(AACFAIController* AIController)
         return Data.AIController == AIController;
     });
 
+    // Remove from forced LOD timers
+    ForcedLODTimers.Remove(AIController);
+
     UE_LOG(LogTemp, Log, TEXT("AI LOD Manager: Unregistered AI %s (Total: %d)"),
         *AIController->GetName(), RegisteredAI.Num());
 }
@@ -136,42 +143,77 @@ void UAILODManager::UpdateAILOD()
         return;
     }
 
-    CleanupInvalidAI();
-    UpdatePlayerReference();
-
-    if (!CachedPlayerPawn) {
-        return;
-    }
-
-    if (LODSettings.bUsePlayerPredictiveLOD) {
-        PredictPlayerMovement();
-    }
-
-    const FVector PlayerPosition = CachedPlayerPawn->GetActorLocation();
-    const FVector TargetPosition = LODSettings.bUsePlayerPredictiveLOD ? PredictedPlayerPosition : PlayerPosition;
     const float CurrentTime = GetWorld()->GetTimeSeconds();
 
-    // Update distances and priorities
-    for (FAILODData& AIData : RegisteredAI) {
-        if (!AIData.AIController || !IsValid(AIData.AIController)) {
+    // Update player position prediction
+    PredictPlayerPosition();
+
+    // Track LOD level counts
+    TMap<EAILODLevel, int32> LODCounts;
+    LODCounts.Add(EAILODLevel::Inactive, 0);
+    LODCounts.Add(EAILODLevel::Minimal, 0);
+    LODCounts.Add(EAILODLevel::Standard, 0);
+    LODCounts.Add(EAILODLevel::High, 0);
+    LODCounts.Add(EAILODLevel::Maximum, 0);
+
+    // Update all AI LOD data
+    for (FAILODData& Data : RegisteredAI) {
+        if (!Data.AIController || !IsValid(Data.AIController)) {
             continue;
         }
 
-        if (APawn* AIPawn = AIData.AIController->GetPawn()) {
-            AIData.DistanceToPlayer = FVector::Dist(AIPawn->GetActorLocation(), TargetPosition);
-            AIData.LODPriority = CalculateAIPriority(AIData);
-            AIData.LastLODUpdateTime = CurrentTime;
+        UpdateAILODData(Data);
 
-            // Update combat status
-            if (APortalDefenseAIController* PatrolAI = Cast<APortalDefenseAIController>(AIData.AIController)) {
-                AIData.bInCombat = PatrolAI->IsInCombat();
-                AIData.bIsEngagingPlayer = PatrolAI->IsEngagingPlayer();
+        // Calculate new LOD level
+        EAILODLevel NewLODLevel = CalculateAILODLevel(Data);
+
+        // Apply constraints for high-performance LOD levels
+        if (NewLODLevel == EAILODLevel::Maximum && LODCounts[EAILODLevel::Maximum] >= LODSettings.MaxMaximumLODAI) {
+            NewLODLevel = EAILODLevel::High;
+        }
+
+        if (NewLODLevel == EAILODLevel::High && LODCounts[EAILODLevel::High] >= LODSettings.MaxHighLODAI) {
+            NewLODLevel = EAILODLevel::Standard;
+        }
+
+        // Check for forced LOD override
+        if (ForcedLODTimers.Contains(Data.AIController)) {
+            float* Timer = ForcedLODTimers.Find(Data.AIController);
+            if (Timer && *Timer > 0.0f) {
+                // Keep current forced LOD level
+                NewLODLevel = Data.CurrentLODLevel;
             }
         }
+
+        // Update LOD level if changed
+        if (Data.CurrentLODLevel != NewLODLevel) {
+            EAILODLevel PreviousLOD = Data.CurrentLODLevel;
+            Data.CurrentLODLevel = NewLODLevel;
+            Data.LastLODUpdateTime = CurrentTime;
+
+            // Broadcast LOD change event
+            OnAILODChanged.Broadcast(Data.AIController, NewLODLevel);
+
+            UE_LOG(LogTemp, VeryVerbose, TEXT("AI LOD Manager: %s LOD changed from %d to %d"),
+                *Data.AIController->GetName(),
+                static_cast<int32>(PreviousLOD),
+                static_cast<int32>(NewLODLevel));
+        }
+
+        // Update count
+        LODCounts[Data.CurrentLODLevel]++;
     }
 
-    CalculateLODPriorities();
-    ApplyLODLimits();
+    // Process forced LOD timers
+    ProcessForcedLODTimers();
+
+    // Log performance metrics
+    UE_LOG(LogTemp, VeryVerbose, TEXT("AI LOD Distribution - Inactive: %d, Minimal: %d, Standard: %d, High: %d, Maximum: %d"),
+        LODCounts[EAILODLevel::Inactive],
+        LODCounts[EAILODLevel::Minimal],
+        LODCounts[EAILODLevel::Standard],
+        LODCounts[EAILODLevel::High],
+        LODCounts[EAILODLevel::Maximum]);
 }
 
 void UAILODManager::SetAILODLevel(AACFAIController* AIController, EAILODLevel NewLODLevel)
@@ -180,9 +222,20 @@ void UAILODManager::SetAILODLevel(AACFAIController* AIController, EAILODLevel Ne
         return;
     }
 
-    for (FAILODData& AIData : RegisteredAI) {
-        if (AIData.AIController == AIController) {
-            SetAILODInternal(AIData, NewLODLevel);
+    for (FAILODData& Data : RegisteredAI) {
+        if (Data.AIController == AIController) {
+            if (Data.CurrentLODLevel != NewLODLevel) {
+                EAILODLevel PreviousLOD = Data.CurrentLODLevel;
+                Data.CurrentLODLevel = NewLODLevel;
+                Data.LastLODUpdateTime = GetWorld()->GetTimeSeconds();
+
+                OnAILODChanged.Broadcast(AIController, NewLODLevel);
+
+                UE_LOG(LogTemp, Log, TEXT("AI LOD Manager: Manually set %s LOD from %d to %d"),
+                    *AIController->GetName(),
+                    static_cast<int32>(PreviousLOD),
+                    static_cast<int32>(NewLODLevel));
+            }
             break;
         }
     }
@@ -190,308 +243,46 @@ void UAILODManager::SetAILODLevel(AACFAIController* AIController, EAILODLevel Ne
 
 void UAILODManager::ForceHighLOD(AACFAIController* AIController, float Duration)
 {
-    SetAILODLevel(AIController, EAILODLevel::High);
+    if (!AIController || Duration <= 0.0f) {
+        return;
+    }
 
-    // Set timer to revert LOD after duration
-    FTimerHandle RevertTimer;
-    GetWorld()->GetTimerManager().SetTimer(RevertTimer, [this, AIController]() {
-        for (FAILODData& AIData : RegisteredAI)
-        {
-            if (AIData.AIController == AIController)
-            {
-                EAILODLevel OptimalLOD = CalculateOptimalLOD(AIData);
-                SetAILODInternal(AIData, OptimalLOD);
-                break;
-            }
-        } }, Duration, false);
+    SetAILODLevel(AIController, EAILODLevel::High);
+    ForcedLODTimers.Add(AIController, Duration);
+
+    UE_LOG(LogTemp, Log, TEXT("AI LOD Manager: Forced High LOD for %s (Duration: %.1fs)"),
+        *AIController->GetName(), Duration);
 }
 
 void UAILODManager::ForceMaximumLOD(AACFAIController* AIController, float Duration)
 {
-    SetAILODLevel(AIController, EAILODLevel::Maximum);
+    if (!AIController || Duration <= 0.0f) {
+        return;
+    }
 
-    // Set timer to revert LOD after duration
-    FTimerHandle RevertTimer;
-    GetWorld()->GetTimerManager().SetTimer(RevertTimer, [this, AIController]() {
-        for (FAILODData& AIData : RegisteredAI)
-        {
-            if (AIData.AIController == AIController)
-            {
-                EAILODLevel OptimalLOD = CalculateOptimalLOD(AIData);
-                SetAILODInternal(AIData, OptimalLOD);
-                break;
-            }
-        } }, Duration, false);
+    SetAILODLevel(AIController, EAILODLevel::Maximum);
+    ForcedLODTimers.Add(AIController, Duration);
+
+    UE_LOG(LogTemp, Log, TEXT("AI LOD Manager: Forced Maximum LOD for %s (Duration: %.1fs)"),
+        *AIController->GetName(), Duration);
 }
 
 int32 UAILODManager::GetAICountByLOD(EAILODLevel LODLevel) const
 {
-    return RegisteredAI.FilterByPredicate([LODLevel](const FAILODData& Data) {
-                           return Data.CurrentLODLevel == LODLevel;
-                       })
-        .Num();
-}
-
-void UAILODManager::UpdatePlayerReference()
-{
-    if (!CachedPlayerPawn || !IsValid(CachedPlayerPawn)) {
-        if (APlayerController* PC = UGameplayStatics::GetPlayerController(GetWorld(), 0)) {
-            CachedPlayerPawn = PC->GetPawn();
+    int32 Count = 0;
+    for (const FAILODData& Data : RegisteredAI) {
+        if (Data.CurrentLODLevel == LODLevel) {
+            Count++;
         }
     }
-}
-
-void UAILODManager::CalculateLODPriorities()
-{
-    // Sort AI by priority (highest first)
-    RegisteredAI.Sort([](const FAILODData& A, const FAILODData& B) {
-        return A.LODPriority > B.LODPriority;
-    });
-
-    // Apply optimal LOD based on priority and distance
-    for (FAILODData& AIData : RegisteredAI) {
-        EAILODLevel OptimalLOD = CalculateOptimalLOD(AIData);
-
-        if (AIData.CurrentLODLevel != OptimalLOD) {
-            SetAILODInternal(AIData, OptimalLOD);
-        }
-    }
-}
-
-void UAILODManager::ApplyLODLimits()
-{
-    int32 HighLODCount = 0;
-    int32 MaximumLODCount = 0;
-
-    // First pass: Count current high-level LODs
-    for (const FAILODData& AIData : RegisteredAI) {
-        if (AIData.CurrentLODLevel == EAILODLevel::High) {
-            HighLODCount++;
-        } else if (AIData.CurrentLODLevel == EAILODLevel::Maximum) {
-            MaximumLODCount++;
-        }
-    }
-
-    // Second pass: Downgrade excess high-level LODs
-    for (FAILODData& AIData : RegisteredAI) {
-        // Downgrade excess Maximum LOD AI
-        if (AIData.CurrentLODLevel == EAILODLevel::Maximum && MaximumLODCount > LODSettings.MaxMaximumLODAI) {
-            // Keep AI in combat at Maximum LOD
-            if (!AIData.bInCombat && !AIData.bIsEngagingPlayer) {
-                SetAILODInternal(AIData, EAILODLevel::High);
-                MaximumLODCount--;
-                HighLODCount++;
-            }
-        }
-
-        // Downgrade excess High LOD AI
-        if (AIData.CurrentLODLevel == EAILODLevel::High && HighLODCount > LODSettings.MaxHighLODAI) {
-            if (!AIData.bInCombat && !AIData.bIsEngagingPlayer) {
-                SetAILODInternal(AIData, EAILODLevel::Standard);
-                HighLODCount--;
-            }
-        }
-    }
-}
-
-void UAILODManager::SetAILODInternal(FAILODData& AIData, EAILODLevel NewLODLevel)
-{
-    if (AIData.CurrentLODLevel == NewLODLevel || !AIData.AIController) {
-        return;
-    }
-
-    const EAILODLevel OldLODLevel = AIData.CurrentLODLevel;
-    AIData.CurrentLODLevel = NewLODLevel;
-
-    // Apply LOD settings to AI
-    if (UBehaviorTreeComponent* BTComp = AIData.AIController->GetBehaviorTreeComponent()) {
-        switch (NewLODLevel) {
-        case EAILODLevel::Inactive:
-            BTComp->PauseLogic(TEXT("LOD_Inactive"));
-            BTComp->SetComponentTickEnabled(false);
-            break;
-
-        case EAILODLevel::Minimal:
-            BTComp->ResumeLogic(TEXT("LOD_Inactive"));
-            BTComp->SetComponentTickEnabled(true);
-            BTComp->SetComponentTickInterval(0.5f);
-            break;
-
-        case EAILODLevel::Standard:
-            BTComp->ResumeLogic(TEXT("LOD_Inactive"));
-            BTComp->SetComponentTickEnabled(true);
-            BTComp->SetComponentTickInterval(0.1f);
-            break;
-
-        case EAILODLevel::High:
-            BTComp->ResumeLogic(TEXT("LOD_Inactive"));
-            BTComp->SetComponentTickEnabled(true);
-            BTComp->SetComponentTickInterval(0.05f);
-            break;
-
-        case EAILODLevel::Maximum:
-            BTComp->ResumeLogic(TEXT("LOD_Inactive"));
-            BTComp->SetComponentTickEnabled(true);
-            BTComp->SetComponentTickInterval(0.0f); // Every frame
-            break;
-        }
-    }
-
-    // Adjust AI Perception
-    if (UAIPerceptionComponent* PerceptionComp = AIData.AIController->GetAIPerceptionComponent()) {
-        switch (NewLODLevel) {
-        case EAILODLevel::Inactive:
-            PerceptionComp->SetComponentTickEnabled(false);
-            break;
-
-        case EAILODLevel::Minimal:
-            PerceptionComp->SetComponentTickEnabled(true);
-            PerceptionComp->SetComponentTickInterval(1.0f);
-            break;
-
-        case EAILODLevel::Standard:
-            PerceptionComp->SetComponentTickEnabled(true);
-            PerceptionComp->SetComponentTickInterval(0.2f);
-            break;
-
-        case EAILODLevel::High:
-            PerceptionComp->SetComponentTickEnabled(true);
-            PerceptionComp->SetComponentTickInterval(0.1f);
-            break;
-
-        case EAILODLevel::Maximum:
-            PerceptionComp->SetComponentTickEnabled(true);
-            PerceptionComp->SetComponentTickInterval(0.0f);
-            break;
-        }
-    }
-
-    // Adjust Animation LOD
-    if (APawn* AIPawn = AIData.AIController->GetPawn()) {
-        if (USkeletalMeshComponent* MeshComp = AIPawn->FindComponentByClass<USkeletalMeshComponent>()) {
-            switch (NewLODLevel) {
-            case EAILODLevel::Inactive:
-                MeshComp->bPauseAnims = true;
-                MeshComp->SetComponentTickEnabled(false);
-                break;
-
-            case EAILODLevel::Minimal:
-                MeshComp->bPauseAnims = false;
-                MeshComp->SetComponentTickEnabled(true);
-                MeshComp->SetComponentTickInterval(0.1f);
-                break;
-
-            default:
-                MeshComp->bPauseAnims = false;
-                MeshComp->SetComponentTickEnabled(true);
-                MeshComp->SetComponentTickInterval(0.0f);
-                break;
-            }
-        }
-    }
-
-    // Broadcast event
-    OnAILODChanged.Broadcast(AIData.AIController, NewLODLevel);
-
-    UE_LOG(LogTemp, VeryVerbose, TEXT("AI LOD: %s changed from %d to %d (Distance: %.1f)"),
-        *AIData.AIController->GetName(),
-        static_cast<int32>(OldLODLevel),
-        static_cast<int32>(NewLODLevel),
-        AIData.DistanceToPlayer);
-}
-
-void UAILODManager::PredictPlayerMovement()
-{
-    if (!CachedPlayerPawn) {
-        return;
-    }
-
-    const FVector CurrentPlayerPosition = CachedPlayerPawn->GetActorLocation();
-
-    if (LastPlayerPosition != FVector::ZeroVector) {
-        const FVector PlayerVelocity = (CurrentPlayerPosition - LastPlayerPosition) / LODSettings.LODUpdateFrequency;
-        PredictedPlayerPosition = CurrentPlayerPosition + (PlayerVelocity * 2.0f); // Predict 2 seconds ahead
-    } else {
-        PredictedPlayerPosition = CurrentPlayerPosition;
-    }
-
-    LastPlayerPosition = CurrentPlayerPosition;
-}
-
-void UAILODManager::MonitorPerformance()
-{
-    if (UEngine* Engine = GEngine) {
-        AverageFrameTime = Engine->GetMaxTickRate() > 0 ? 1000.0f / Engine->GetMaxTickRate() : 16.67f;
-
-        // Auto-adjust LOD settings based on performance
-        if (AverageFrameTime > 20.0f) // Below 50 FPS
-        {
-            LODSettings.MaxHighLODAI = FMath::Max(5, LODSettings.MaxHighLODAI - 1);
-            LODSettings.MaxMaximumLODAI = FMath::Max(3, LODSettings.MaxMaximumLODAI - 1);
-        } else if (AverageFrameTime < 14.0f) // Above 70 FPS
-        {
-            LODSettings.MaxHighLODAI = FMath::Min(20, LODSettings.MaxHighLODAI + 1);
-            LODSettings.MaxMaximumLODAI = FMath::Min(12, LODSettings.MaxMaximumLODAI + 1);
-        }
-    }
-}
-
-void UAILODManager::CleanupInvalidAI()
-{
-    RegisteredAI.RemoveAll([](const FAILODData& Data) {
-        return !Data.AIController || !IsValid(Data.AIController);
-    });
-}
-
-EAILODLevel UAILODManager::CalculateOptimalLOD(const FAILODData& AIData) const
-{
-    // Always maximum LOD for AI in combat
-    if (AIData.bInCombat || AIData.bIsEngagingPlayer) {
-        return EAILODLevel::Maximum;
-    }
-
-    const float Distance = AIData.DistanceToPlayer;
-
-    if (Distance <= LODSettings.MaximumDistance) {
-        return EAILODLevel::Maximum;
-    } else if (Distance <= LODSettings.HighDistance) {
-        return EAILODLevel::High;
-    } else if (Distance <= LODSettings.StandardDistance) {
-        return EAILODLevel::Standard;
-    } else if (Distance <= LODSettings.MinimalDistance) {
-        return EAILODLevel::Minimal;
-    } else {
-        return EAILODLevel::Inactive;
-    }
-}
-
-float UAILODManager::CalculateAIPriority(const FAILODData& AIData) const
-{
-    float Priority = 1.0f;
-
-    // Combat AI gets highest priority
-    if (AIData.bInCombat) {
-        Priority += 10.0f;
-    }
-
-    // AI engaging player gets very high priority
-    if (AIData.bIsEngagingPlayer) {
-        Priority += 8.0f;
-    }
-
-    // Distance-based priority (closer = higher)
-    const float MaxDistance = LODSettings.InactiveDistance;
-    const float DistanceFactor = FMath::Clamp(1.0f - (AIData.DistanceToPlayer / MaxDistance), 0.0f, 1.0f);
-    Priority += DistanceFactor * 5.0f;
-
-    return Priority;
+    return Count;
 }
 
 void UAILODManager::StartLODUpdateTimer()
 {
     if (GetWorld()) {
         GetWorld()->GetTimerManager().SetTimer(LODUpdateTimer, this,
-            &UAILODManager::UpdateAILOD, LODSettings.LODUpdateFrequency, true);
+            &UAILODManager::OnLODUpdateTimer, LODSettings.LODUpdateFrequency, true);
     }
 }
 
@@ -499,5 +290,153 @@ void UAILODManager::StopLODUpdateTimer()
 {
     if (GetWorld()) {
         GetWorld()->GetTimerManager().ClearTimer(LODUpdateTimer);
+    }
+}
+
+void UAILODManager::OnLODUpdateTimer()
+{
+    UpdateAILOD();
+}
+
+void UAILODManager::MonitorPerformance()
+{
+    if (GetWorld()) {
+        const float CurrentFPS = 1.0f / GetWorld()->GetDeltaSeconds();
+        const float CurrentFrameTime = GetWorld()->GetDeltaSeconds() * 1000.0f; // Convert to milliseconds
+
+        FrameTimes.Add(CurrentFrameTime);
+        if (FrameTimes.Num() > 60) { // Keep last 60 frames
+            FrameTimes.RemoveAt(0);
+        }
+
+        // Calculate average frame time
+        float TotalFrameTime = 0.0f;
+        for (float FrameTime : FrameTimes) {
+            TotalFrameTime += FrameTime;
+        }
+        AverageFrameTime = FrameTimes.Num() > 0 ? TotalFrameTime / FrameTimes.Num() : 16.67f;
+
+        // Adjust LOD update frequency based on performance
+        if (AverageFrameTime > 33.33f) { // Below 30 FPS
+            LODSettings.LODUpdateFrequency = FMath::Max(LODSettings.LODUpdateFrequency * 1.1f, 1.0f);
+        } else if (AverageFrameTime < 16.67f) { // Above 60 FPS
+            LODSettings.LODUpdateFrequency = FMath::Min(LODSettings.LODUpdateFrequency * 0.9f, 0.1f);
+        }
+    }
+}
+
+void UAILODManager::UpdatePlayerReference()
+{
+    if (GetWorld()) {
+        if (APlayerController* PlayerController = GetWorld()->GetFirstPlayerController()) {
+            if (APawn* PlayerPawn = PlayerController->GetPawn()) {
+                LastPlayerPosition = PlayerPawn->GetActorLocation();
+            }
+        }
+    }
+}
+
+void UAILODManager::PredictPlayerPosition()
+{
+    if (!GetWorld()) {
+        return;
+    }
+
+    if (APlayerController* PlayerController = GetWorld()->GetFirstPlayerController()) {
+        if (APawn* PlayerPawn = PlayerController->GetPawn()) {
+            FVector CurrentPlayerPosition = PlayerPawn->GetActorLocation();
+
+            if (LODSettings.bUsePlayerPredictiveLOD) {
+                FVector PlayerVelocity = (CurrentPlayerPosition - LastPlayerPosition) / LODSettings.LODUpdateFrequency;
+                PredictedPlayerPosition = CurrentPlayerPosition + (PlayerVelocity * LODSettings.LODUpdateFrequency * 2.0f);
+            } else {
+                PredictedPlayerPosition = CurrentPlayerPosition;
+            }
+
+            LastPlayerPosition = CurrentPlayerPosition;
+        }
+    }
+}
+
+EAILODLevel UAILODManager::CalculateAILODLevel(const FAILODData& AIData) const
+{
+    // Combat state takes priority
+    if (AIData.bInCombat || AIData.bIsEngagingPlayer) {
+        return AIData.DistanceToPlayer <= LODSettings.MaximumDistance ? EAILODLevel::Maximum : EAILODLevel::High;
+    }
+
+    // Distance-based LOD calculation using predicted player position
+    FVector ComparisonPosition = LODSettings.bUsePlayerPredictiveLOD ? PredictedPlayerPosition : LastPlayerPosition;
+
+    if (AIData.AIController && AIData.AIController->GetPawn()) {
+        float DistanceToPosition = FVector::Dist(AIData.AIController->GetPawn()->GetActorLocation(), ComparisonPosition);
+
+        if (DistanceToPosition <= LODSettings.MaximumDistance) {
+            return EAILODLevel::Maximum;
+        } else if (DistanceToPosition <= LODSettings.HighDistance) {
+            return EAILODLevel::High;
+        } else if (DistanceToPosition <= LODSettings.StandardDistance) {
+            return EAILODLevel::Standard;
+        } else if (DistanceToPosition <= LODSettings.MinimalDistance) {
+            return EAILODLevel::Minimal;
+        }
+    }
+
+    return EAILODLevel::Inactive;
+}
+
+void UAILODManager::UpdateAILODData(FAILODData& AIData)
+{
+    if (!AIData.AIController || !IsValid(AIData.AIController)) {
+        return;
+    }
+
+    // Update distance to player
+    if (AIData.AIController->GetPawn()) {
+        FVector ComparisonPosition = LODSettings.bUsePlayerPredictiveLOD ? PredictedPlayerPosition : LastPlayerPosition;
+        AIData.DistanceToPlayer = FVector::Dist(AIData.AIController->GetPawn()->GetActorLocation(), ComparisonPosition);
+    }
+
+    // Update combat status for Portal Defense AI Controllers
+    if (APortalDefenseAIController* PortalAI = Cast<APortalDefenseAIController>(AIData.AIController)) {
+        AIData.bInCombat = PortalAI->IsInCombat();
+        AIData.bIsEngagingPlayer = PortalAI->IsEngagingPlayer();
+    }
+
+    // Calculate LOD priority based on multiple factors
+    float Priority = 1.0f;
+
+    // Combat priority boost
+    if (AIData.bInCombat)
+        Priority += 2.0f;
+    if (AIData.bIsEngagingPlayer)
+        Priority += 3.0f;
+
+    // Distance-based priority
+    Priority += FMath::Max(0.0f, (LODSettings.StandardDistance - AIData.DistanceToPlayer) / LODSettings.StandardDistance);
+
+    AIData.LODPriority = Priority;
+}
+
+void UAILODManager::ProcessForcedLODTimers()
+{
+    const float DeltaTime = LODSettings.LODUpdateFrequency;
+
+    TArray<TObjectPtr<AACFAIController>> ExpiredControllers;
+
+    for (auto& TimerPair : ForcedLODTimers) {
+        TimerPair.Value -= DeltaTime;
+
+        if (TimerPair.Value <= 0.0f) {
+            ExpiredControllers.Add(TimerPair.Key);
+        }
+    }
+
+    // Remove expired timers
+    for (const TObjectPtr<AACFAIController>& Controller : ExpiredControllers) {
+        ForcedLODTimers.Remove(Controller);
+
+        UE_LOG(LogTemp, Log, TEXT("AI LOD Manager: Forced LOD expired for %s"),
+            Controller ? *Controller->GetName() : TEXT("NULL"));
     }
 }

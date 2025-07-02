@@ -3,23 +3,21 @@
 #pragma once
 
 #include "ACFAIController.h"
-#include "ACFAITypes.h"
 #include "Components/ActorComponent.h"
 #include "CoreMinimal.h"
-#include "Engine/Engine.h"
 #include "Engine/World.h"
+#include "EngineUtils.h"
 #include "GameFramework/GameModeBase.h"
 #include "PortalDefenseAIController.h"
-#include "TimerManager.h"
 #include "AILODManager.generated.h"
 
 UENUM(BlueprintType)
 enum class EAILODLevel : uint8 {
-    Inactive, // AI is paused, no behavior tree, no perception
-    Minimal, // Basic patrol only, reduced tick rate
-    Standard, // Normal AI behavior, standard tick rate
-    High, // Enhanced behavior, full perception
-    Maximum // All systems active, highest priority
+    Inactive UMETA(DisplayName = "Inactive"),
+    Minimal UMETA(DisplayName = "Minimal"),
+    Standard UMETA(DisplayName = "Standard"),
+    High UMETA(DisplayName = "High"),
+    Maximum UMETA(DisplayName = "Maximum")
 };
 
 USTRUCT(BlueprintType)
@@ -109,7 +107,7 @@ protected:
 
 public:
     // Singleton access
-    UFUNCTION(BlueprintPure, Category = "AI LOD", CallInEditor = true)
+    UFUNCTION(BlueprintPure, Category = "AI LOD", meta = (CallInEditor = "true"))
     static UAILODManager* GetInstance(UWorld* World);
 
     // AI Registration
@@ -164,32 +162,30 @@ protected:
     TArray<FAILODData> RegisteredAI;
 
     UPROPERTY(BlueprintReadOnly, Category = "AI LOD")
-    TObjectPtr<APawn> CachedPlayerPawn;
-
-    UPROPERTY(BlueprintReadOnly, Category = "AI LOD")
     float AverageFrameTime = 16.67f;
 
     UPROPERTY(BlueprintReadOnly, Category = "AI LOD")
-    FVector PredictedPlayerPosition;
+    FVector PredictedPlayerPosition = FVector::ZeroVector;
 
     UPROPERTY(BlueprintReadOnly, Category = "AI LOD")
-    FVector LastPlayerPosition;
+    FVector LastPlayerPosition = FVector::ZeroVector;
 
 private:
+    static TObjectPtr<UAILODManager> InstancePtr;
+
     FTimerHandle LODUpdateTimer;
     FTimerHandle PerformanceMonitorTimer;
 
-    static TObjectPtr<UAILODManager> InstancePtr;
+    TArray<float> FrameTimes;
+    TMap<TObjectPtr<AACFAIController>, float> ForcedLODTimers;
 
-    void UpdatePlayerReference();
-    void CalculateLODPriorities();
-    void ApplyLODLimits();
-    void SetAILODInternal(FAILODData& AIData, EAILODLevel NewLODLevel);
-    void PredictPlayerMovement();
-    void MonitorPerformance();
-    void CleanupInvalidAI();
-    EAILODLevel CalculateOptimalLOD(const FAILODData& AIData) const;
-    float CalculateAIPriority(const FAILODData& AIData) const;
     void StartLODUpdateTimer();
     void StopLODUpdateTimer();
+    void OnLODUpdateTimer();
+    void MonitorPerformance();
+    void UpdatePlayerReference();
+    void PredictPlayerPosition();
+    EAILODLevel CalculateAILODLevel(const FAILODData& AIData) const;
+    void UpdateAILODData(FAILODData& AIData);
+    void ProcessForcedLODTimers();
 };

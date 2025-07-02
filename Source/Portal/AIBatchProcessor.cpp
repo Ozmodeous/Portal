@@ -1,35 +1,32 @@
 // Copyright (C) Developed by Pask, Published by Dark Tower Interactive SRL 2024. All Rights Reserved.
 
 #include "AIBatchProcessor.h"
-#include "Async/Async.h"
+#include "Async/AsyncWork.h"
 #include "Engine/World.h"
+#include "EngineUtils.h"
+#include "GameFramework/GameModeBase.h"
 #include "HAL/PlatformFilemanager.h"
-#include "Kismet/GameplayStatics.h"
-#include "Misc/DateTime.h"
+#include "TimerManager.h"
 
 TObjectPtr<UAIBatchProcessor> UAIBatchProcessor::InstancePtr = nullptr;
 
 UAIBatchProcessor::UAIBatchProcessor()
 {
     PrimaryComponentTick.bCanEverTick = true;
-    PrimaryComponentTick.TickInterval = 0.0f; // Every frame for Maximum LOD processing
+    bWantsInitializeComponent = true;
 
+    // Default batch settings optimized for performance
     BatchSettings.MaxAIPerBatch = 25;
     BatchSettings.InactiveBatchUpdateRate = 2.0f;
     BatchSettings.MinimalBatchUpdateRate = 1.0f;
     BatchSettings.StandardBatchUpdateRate = 0.5f;
     BatchSettings.HighBatchUpdateRate = 0.1f;
-    BatchSettings.MaximumBatchUpdateRate = 0.0f;
+    BatchSettings.MaximumBatchUpdateRate = 0.0f; // Every tick
     BatchSettings.bUseAsyncProcessing = true;
     BatchSettings.bEnablePerformanceScaling = true;
 
     AverageProcessingTime = 0.0f;
-    CurrentInactiveBatchIndex = 0;
-    CurrentMinimalBatchIndex = 0;
-    CurrentStandardBatchIndex = 0;
-    CurrentHighBatchIndex = 0;
-
-    ProcessingTimes.Reserve(100);
+    LastFrameTime = 16.67f;
 }
 
 void UAIBatchProcessor::BeginPlay()
@@ -37,11 +34,16 @@ void UAIBatchProcessor::BeginPlay()
     Super::BeginPlay();
 
     InstancePtr = this;
+
+    // Get reference to LOD Manager
     LODManager = UAILODManager::GetInstance(GetWorld());
+    if (!LODManager) {
+        UE_LOG(LogTemp, Warning, TEXT("AIBatchProcessor: Could not find LOD Manager instance"));
+    }
 
     InitializeBatchTimers();
 
-    UE_LOG(LogTemp, Log, TEXT("AI Batch Processor initialized - Max batch size: %d"), BatchSettings.MaxAIPerBatch);
+    UE_LOG(LogTemp, Log, TEXT("AI Batch Processor initialized - Max AI per batch: %d"), BatchSettings.MaxAIPerBatch);
 }
 
 void UAIBatchProcessor::EndPlay(const EEndPlayReason::Type EndPlayReason)
@@ -59,14 +61,17 @@ void UAIBatchProcessor::TickComponent(float DeltaTime, ELevelTick TickType, FAct
 {
     Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
 
-    // Process Maximum LOD AI every frame
-    ProcessMaximumBatch();
-
-    // Track frame time for performance scaling
     LastFrameTime = DeltaTime * 1000.0f; // Convert to milliseconds
 
-    if (BatchSettings.bEnablePerformanceScaling) {
-        AdjustBatchSizes(LastFrameTime);
+    // Process Maximum LOD AI every tick
+    ProcessMaximumBatch();
+
+    // Update batches periodically
+    static float BatchUpdateTimer = 0.0f;
+    BatchUpdateTimer += DeltaTime;
+    if (BatchUpdateTimer >= 1.0f) {
+        UpdateBatches();
+        BatchUpdateTimer = 0.0f;
     }
 }
 
@@ -134,50 +139,45 @@ void UAIBatchProcessor::ProcessBatch(EAILODLevel LODLevel)
         : (LODLevel == EAILODLevel::Standard)                                                                                  ? CurrentStandardBatchIndex
                                                                                                                                : CurrentHighBatchIndex;
 
-    // Process batch portion
-    for (int32 i = 0; i < MaxProcessPerFrame; i++) {
+    // Process batch starting from current index
+    for (int32 i = 0; i < MaxProcessPerFrame && Batch.Num() > 0; ++i) {
         if (CurrentIndex >= Batch.Num()) {
             CurrentIndex = 0; // Wrap around
         }
 
-        AACFAIController* AIController = Batch[CurrentIndex];
-        if (AIController && IsValid(AIController)) {
-            // Process AI based on LOD level
-            switch (LODLevel) {
-            case EAILODLevel::Inactive:
-                // Minimal processing - just keep alive
-                break;
+        if (Batch.IsValidIndex(CurrentIndex)) {
+            TObjectPtr<AACFAIController> AIController = Batch[CurrentIndex];
 
-            case EAILODLevel::Minimal:
-                // Basic patrol logic
-                if (APortalDefenseAIController* PatrolAI = Cast<APortalDefenseAIController>(AIController)) {
-                    PatrolAI->UpdatePatrolLogic();
+            if (AIController && IsValid(AIController)) {
+                if (APortalDefenseAIController* PortalAI = Cast<APortalDefenseAIController>(AIController)) {
+                    // Process different types of updates based on LOD level
+                    switch (LODLevel) {
+                    case EAILODLevel::Inactive:
+                        // Minimal processing for inactive AI
+                        break;
+                    case EAILODLevel::Minimal:
+                        PortalAI->UpdatePatrolLogic();
+                        break;
+                    case EAILODLevel::Standard:
+                        PortalAI->UpdatePatrolLogic();
+                        PortalAI->Tick(LastFrameTime / 1000.0f); // Convert back to seconds
+                        break;
+                    case EAILODLevel::High:
+                        PortalAI->UpdatePatrolLogic();
+                        PortalAI->Tick(LastFrameTime / 1000.0f);
+                        PortalAI->UpdateCombatBehavior();
+                        break;
+                    case EAILODLevel::Maximum:
+                        // Full processing handled in ProcessMaximumBatch
+                        break;
+                    }
                 }
-                break;
-
-            case EAILODLevel::Standard:
-                // Standard AI processing
-                if (APortalDefenseAIController* PatrolAI = Cast<APortalDefenseAIController>(AIController)) {
-                    PatrolAI->UpdatePatrolLogic();
-                    PatrolAI->CheckForPlayerThreats();
-                }
-                break;
-
-            case EAILODLevel::High:
-                // Enhanced AI processing
-                if (APortalDefenseAIController* PatrolAI = Cast<APortalDefenseAIController>(AIController)) {
-                    PatrolAI->UpdatePatrolLogic();
-                    PatrolAI->CheckForPlayerThreats();
-                    PatrolAI->UpdateCombatBehavior();
-                }
-                break;
-
-            case EAILODLevel::Maximum:
-                // Full AI processing - handled in TickComponent
-                break;
+                ProcessedCount++;
+            } else {
+                // Remove invalid AI from batch
+                Batch.RemoveAt(CurrentIndex);
+                continue;
             }
-
-            ProcessedCount++;
         }
 
         CurrentIndex++;
@@ -242,65 +242,90 @@ void UAIBatchProcessor::ProcessBatchAsync(EAILODLevel LODLevel)
 
     // Process asynchronously for non-critical LOD levels
     if (LODLevel == EAILODLevel::Inactive || LODLevel == EAILODLevel::Minimal) {
-        AsyncTask(ENamedThreads::AnyBackgroundThreadNormalTask, [BatchCopy, LODLevel, this]() {
+        // Use task graph for async processing
+        FFunctionGraphTask::CreateAndDispatchWhenReady([this, BatchCopy, LODLevel]() {
+            const double StartTime = FPlatformTime::Seconds();
+
             for (const TWeakObjectPtr<AACFAIController>& WeakAI : BatchCopy) {
                 if (AACFAIController* AIController = WeakAI.Get()) {
-                    // Minimal background processing
-                    if (LODLevel == EAILODLevel::Minimal) {
-                        if (APortalDefenseAIController* PatrolAI = Cast<APortalDefenseAIController>(AIController)) {
-                            // Basic position updates only
-                            AsyncTask(ENamedThreads::GameThread, [PatrolAI]() {
-                                if (IsValid(PatrolAI)) {
-                                    PatrolAI->UpdatePatrolLogic();
-                                }
-                            });
+                    if (APortalDefenseAIController* PortalAI = Cast<APortalDefenseAIController>(AIController)) {
+                        if (LODLevel == EAILODLevel::Minimal) {
+                            PortalAI->UpdatePatrolLogic();
                         }
                     }
                 }
             }
-        });
+
+            const double EndTime = FPlatformTime::Seconds();
+            const float ProcessingTime = (EndTime - StartTime) * 1000.0f;
+
+            // Update metrics on game thread
+            FFunctionGraphTask::CreateAndDispatchWhenReady([this, ProcessingTime, LODLevel, BatchCopy]() {
+                UpdateProcessingMetrics(ProcessingTime);
+                OnBatchProcessed.Broadcast(LODLevel, BatchCopy.Num());
+            },
+                TStatId(), nullptr, ENamedThreads::GameThread);
+        },
+            TStatId(), nullptr, ENamedThreads::AnyBackgroundThreadNormalTask);
     } else {
-        // Process synchronously for important LOD levels
+        // Process synchronously for critical LOD levels
         ProcessBatch(LODLevel);
     }
 }
 
-void UAIBatchProcessor::AdjustBatchSizes(float FrameTime)
+void UAIBatchProcessor::AdjustBatchSizes()
 {
-    if (FrameTime > 20.0f) // Below 50 FPS
-    {
-        BatchSettings.MaxAIPerBatch = FMath::Max(10, BatchSettings.MaxAIPerBatch - 2);
-    } else if (FrameTime < 14.0f) // Above 70 FPS
-    {
-        BatchSettings.MaxAIPerBatch = FMath::Min(40, BatchSettings.MaxAIPerBatch + 1);
+    if (!BatchSettings.bEnablePerformanceScaling) {
+        return;
+    }
+
+    // Adjust batch sizes based on performance
+    if (AverageProcessingTime > 5.0f) { // If processing takes more than 5ms
+        BatchSettings.MaxAIPerBatch = FMath::Max(BatchSettings.MaxAIPerBatch - 2, 10);
+        UE_LOG(LogTemp, Log, TEXT("AIBatchProcessor: Reduced batch size to %d due to performance"), BatchSettings.MaxAIPerBatch);
+    } else if (AverageProcessingTime < 2.0f) { // If processing takes less than 2ms
+        BatchSettings.MaxAIPerBatch = FMath::Min(BatchSettings.MaxAIPerBatch + 1, 50);
+        UE_LOG(LogTemp, VeryVerbose, TEXT("AIBatchProcessor: Increased batch size to %d"), BatchSettings.MaxAIPerBatch);
     }
 }
 
 void UAIBatchProcessor::OptimizeBatchScheduling()
 {
-    // Prioritize batches with AI in combat or engaging player
-    auto PrioritizeActiveBatch = [](TArray<TObjectPtr<AACFAIController>>& Batch) {
-        Batch.Sort([](const TObjectPtr<AACFAIController>& A, const TObjectPtr<AACFAIController>& B) {
-            if (!A || !B)
-                return false;
-
-            bool AActive = false;
-            bool BActive = false;
-
-            if (APortalDefenseAIController* PatrolA = Cast<APortalDefenseAIController>(A)) {
-                AActive = PatrolA->IsInCombat() || PatrolA->IsEngagingPlayer();
-            }
-
-            if (APortalDefenseAIController* PatrolB = Cast<APortalDefenseAIController>(B)) {
-                BActive = PatrolB->IsInCombat() || PatrolB->IsEngagingPlayer();
-            }
-
-            return AActive > BActive;
-        });
+    // Distribute AI evenly across batches
+    TArray<EAILODLevel> LODLevels = {
+        EAILODLevel::Inactive,
+        EAILODLevel::Minimal,
+        EAILODLevel::Standard,
+        EAILODLevel::High,
+        EAILODLevel::Maximum
     };
 
-    PrioritizeActiveBatch(CurrentBatches.HighBatch);
-    PrioritizeActiveBatch(CurrentBatches.MaximumBatch);
+    for (EAILODLevel LODLevel : LODLevels) {
+        TArray<TObjectPtr<AACFAIController>>& Batch = GetBatchByLOD(LODLevel);
+
+        // Sort AI by priority if LOD Manager is available
+        if (LODManager) {
+            TArray<FAILODData> LODData = LODManager->GetCurrentLODData();
+
+            Batch.Sort([&LODData](const TObjectPtr<AACFAIController>& A, const TObjectPtr<AACFAIController>& B) {
+                float PriorityA = 1.0f;
+                float PriorityB = 1.0f;
+
+                for (const FAILODData& Data : LODData) {
+                    if (Data.AIController == A) {
+                        PriorityA = Data.LODPriority;
+                    } else if (Data.AIController == B) {
+                        PriorityB = Data.LODPriority;
+                    }
+                }
+
+                return PriorityA > PriorityB;
+            });
+        }
+    }
+
+    // Adjust processing rates based on current performance
+    AdjustBatchSizes();
 }
 
 int32 UAIBatchProcessor::GetTotalBatchedAI() const
@@ -322,7 +347,7 @@ void UAIBatchProcessor::InitializeBatchTimers()
 
     FTimerManager& TimerManager = GetWorld()->GetTimerManager();
 
-    // Set up batch processing timers
+    // Set up timers for different batch types
     TimerManager.SetTimer(InactiveBatchTimer, this, &UAIBatchProcessor::ProcessInactiveBatch,
         BatchSettings.InactiveBatchUpdateRate, true);
 
@@ -377,11 +402,11 @@ void UAIBatchProcessor::ProcessMaximumBatch()
 
     for (TObjectPtr<AACFAIController> AIController : CurrentBatches.MaximumBatch) {
         if (AIController && IsValid(AIController)) {
-            if (APortalDefenseAIController* PatrolAI = Cast<APortalDefenseAIController>(AIController)) {
-                PatrolAI->UpdatePatrolLogic();
-                PatrolAI->CheckForPlayerThreats();
-                PatrolAI->UpdateCombatBehavior();
-                PatrolAI->UpdateTargeting();
+            if (APortalDefenseAIController* PortalAI = Cast<APortalDefenseAIController>(AIController)) {
+                PortalAI->UpdatePatrolLogic();
+                PortalAI->UpdateCombatBehavior();
+                PortalAI->UpdateTargeting();
+                PortalAI->Tick(LastFrameTime / 1000.0f);
             }
         }
     }

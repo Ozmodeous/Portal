@@ -1,3 +1,5 @@
+// Copyright (C) Developed by Pask, Published by Dark Tower Interactive SRL 2024. All Rights Reserved.
+
 #pragma once
 
 #include "ACFAIController.h"
@@ -5,7 +7,6 @@
 #include "ACFCoreTypes.h"
 #include "ACFStealthDetectionComponent.h"
 #include "CoreMinimal.h"
-#include "EliteAIIntelligenceComponent.h"
 #include "Engine/TimerHandle.h"
 #include "Game/ACFTypes.h"
 #include "PortalDefenseAIController.generated.h"
@@ -18,6 +19,7 @@ class UACFActionsManagerComponent;
 class ULightComponent;
 class UPointLightComponent;
 class USpotLightComponent;
+class UEliteAIIntelligenceComponent; // Forward declaration instead of include
 
 USTRUCT(BlueprintType)
 struct FPortalAIData {
@@ -74,6 +76,9 @@ enum class EDetectionType : uint8 {
     LightAggro
 };
 
+// Forward declaration for enum that's in EliteAIIntelligenceComponent
+enum class EEliteDifficultyLevel : uint8;
+
 UCLASS()
 class PORTAL_API APortalDefenseAIController : public AACFAIController {
     GENERATED_BODY()
@@ -83,125 +88,73 @@ public:
 
 protected:
     virtual void BeginPlay() override;
-    virtual void OnPossess(APawn* InPawn) override;
-    virtual void OnUnPossess() override;
-    virtual void Tick(float DeltaTime) override;
     virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+    virtual void Tick(float DeltaTime) override;
+    virtual void OnPossess(APawn* InPawn) override;
 
 public:
-    // LOD System Functions (Required for AI LOD Manager)
-    UFUNCTION(BlueprintCallable, Category = "AI LOD")
-    void UpdatePatrolLogic();
+    // Core AI Management
+    UFUNCTION(BlueprintCallable, Category = "AI Management")
+    void ActivateEliteMode(bool bActivate);
 
-    UFUNCTION(BlueprintCallable, Category = "AI LOD")
-    void UpdateCombatBehavior();
-
-    UFUNCTION(BlueprintCallable, Category = "AI LOD")
-    void UpdateTargeting();
-
-    UFUNCTION(BlueprintPure, Category = "AI LOD")
-    bool IsInCombat() const;
-
-    UFUNCTION(BlueprintPure, Category = "AI LOD")
-    bool IsEngagingPlayer() const;
-
-    // Elite AI Integration
-    UFUNCTION(BlueprintCallable, Category = "Elite AI")
-    void SetEliteMode(bool bEnabled, EEliteDifficultyLevel Difficulty = EEliteDifficultyLevel::Novice);
-
-    UFUNCTION(BlueprintPure, Category = "Elite AI")
-    bool IsEliteModeActive() const;
-
-    UFUNCTION(BlueprintPure, Category = "Elite AI")
-    EEliteDifficultyLevel GetEliteDifficulty() const;
-
-    UFUNCTION(BlueprintCallable, Category = "Elite AI")
+    UFUNCTION(BlueprintCallable, Category = "AI Management")
     void SetEliteDifficultyLevel(EEliteDifficultyLevel NewDifficulty);
 
-    // Enhanced Combat Functions (Elite AI Integration)
-    UFUNCTION(BlueprintCallable, Category = "Elite Combat")
-    bool ShouldExecuteEliteDodge(const FVector& ThreatDirection, float ThreatSpeed);
+    UFUNCTION(BlueprintCallable, Category = "AI Management")
+    void UpdateAIData(const FPortalAIData& NewData);
 
-    UFUNCTION(BlueprintCallable, Category = "Elite Combat")
-    FVector GetEliteOptimalPosition(APawn* Target);
-
-    UFUNCTION(BlueprintCallable, Category = "Elite Combat")
-    bool ShouldExecuteEliteAttack(APawn* Target);
-
-    UFUNCTION(BlueprintCallable, Category = "Elite Combat")
-    void RecordPlayerCombatAction(const FString& ActionType, const FVector& ActionLocation);
-
-    UFUNCTION(BlueprintCallable, Category = "Elite Combat")
-    void ExecuteEliteTacticalPlan(APawn* Target);
-
-    // Core AI Functions
-    UFUNCTION(BlueprintCallable, Category = "Portal Defense")
-    void SetPortalTarget(APortalCore* NewPortalTarget);
-
-    UFUNCTION(BlueprintCallable, Category = "Portal Defense")
-    void SetPatrolCenter(FVector Center);
-
-    UFUNCTION(BlueprintCallable, Category = "Portal Defense")
-    void SetPatrolRadius(float Radius);
-
-    UFUNCTION(BlueprintCallable, Category = "Portal Defense")
-    void StartPatrolling();
-
-    UFUNCTION(BlueprintCallable, Category = "Portal Defense")
-    void StopPatrolling();
-
-    UFUNCTION(BlueprintCallable, Category = "Portal Defense")
-    void ApplyAIUpgrade(const FPortalAIData& NewAIData);
-
-    UFUNCTION(BlueprintCallable, Category = "Portal Defense")
-    void CheckForPlayerThreats();
-
-    UFUNCTION(BlueprintPure, Category = "Portal Defense")
+    UFUNCTION(BlueprintPure, Category = "AI Management")
     FPortalAIData GetCurrentAIData() const { return CurrentAIData; }
 
-    UFUNCTION(BlueprintPure, Category = "Portal Defense")
-    EPatrolState GetCurrentPatrolState() const { return CurrentPatrolState; }
+    UFUNCTION(BlueprintPure, Category = "AI Management")
+    bool IsEliteModeActive() const { return bEliteSystemsActive; }
 
-    // ACF Integration
-    UFUNCTION(BlueprintCallable, Category = "ACF Combat")
-    void TriggerAttackAction();
+    // Patrol Functions
+    UFUNCTION(BlueprintCallable, Category = "Patrol")
+    void StartPatrol(FVector CenterLocation, float Radius = 400.0f);
 
-    UFUNCTION(BlueprintCallable, Category = "ACF Combat")
-    void TriggerPatrolAction();
+    UFUNCTION(BlueprintCallable, Category = "Patrol")
+    void StopPatrol();
 
-    UFUNCTION(BlueprintCallable, Category = "ACF Combat")
-    void TriggerAlertAction();
+    UFUNCTION(BlueprintCallable, Category = "Patrol")
+    void SetPatrolSpeed(float Speed);
 
-    UFUNCTION(BlueprintCallable, Category = "ACF Combat")
-    void SetCombatMode(bool bEnableCombat);
+    UFUNCTION(BlueprintCallable, Category = "Patrol")
+    void ResumePatrol();
 
-    UFUNCTION(BlueprintCallable, Category = "ACF Combat")
-    void TriggerEliteAction(const FGameplayTag& ActionTag, EActionPriority Priority = EActionPriority::EMedium);
+    UFUNCTION(BlueprintCallable, Category = "Patrol")
+    void SetClockwisePatrol(bool bClockwise) { bClockwisePatrol = bClockwise; }
 
-    // Advanced Combat Behaviors
-    UFUNCTION(BlueprintCallable, Category = "Advanced Combat")
+    // Combat Functions
+    UFUNCTION(BlueprintCallable, Category = "Combat")
+    void EngageTarget(APawn* Target);
+
+    UFUNCTION(BlueprintCallable, Category = "Combat")
+    void DisengageFromCombat();
+
+    UFUNCTION(BlueprintCallable, Category = "Combat")
     void ExecuteFlankingManeuver(APawn* Target);
 
-    UFUNCTION(BlueprintCallable, Category = "Advanced Combat")
+    UFUNCTION(BlueprintCallable, Category = "Combat")
     void ExecuteTacticalRetreat();
 
-    UFUNCTION(BlueprintCallable, Category = "Advanced Combat")
-    void ExecuteAdvancedDodge(const FVector& ThreatDirection, const FVector& ThreatVelocity);
-
-    UFUNCTION(BlueprintCallable, Category = "Advanced Combat")
-    void ExecutePredictiveAttack(APawn* Target);
-
-    UFUNCTION(BlueprintCallable, Category = "Advanced Combat")
+    UFUNCTION(BlueprintCallable, Category = "Combat")
     void ExecuteCounterAttack(APawn* Target);
 
-    // Overlord System Integration
+    UFUNCTION(BlueprintCallable, Category = "Combat")
+    void UpdateCombatBehavior();
+
+    // AI Overlord Integration
     UFUNCTION(BlueprintCallable, Category = "AI Overlord")
     void ReceiveOverlordCommand(const FString& Command, const TArray<FVector>& Parameters);
 
     UFUNCTION(BlueprintCallable, Category = "AI Overlord")
     void ReportToOverlord(const FString& ReportType, const FVector& Location);
 
-    // Detection and Investigation
+    UFUNCTION(BlueprintPure, Category = "AI Overlord")
+    int32 GetAIUnitID() const { return AIUnitID; }
+
+    // Detection Functions
     UFUNCTION(BlueprintCallable, Category = "Detection")
     void InvestigateLocation(FVector Location, float Duration = 10.0f);
 
@@ -237,6 +190,25 @@ public:
     UFUNCTION(BlueprintCallable, Category = "Learning")
     void RecordCombatOutcome(bool bVictorious, float CombatDuration);
 
+    // Legacy Compatibility Functions (for existing code)
+    UFUNCTION(BlueprintCallable, Category = "AI Management")
+    void ApplyAIUpgrade(const FPortalAIData& NewAIData);
+
+    UFUNCTION(BlueprintCallable, Category = "Patrol")
+    void SetPatrolCenter(const FVector& NewCenter);
+
+    UFUNCTION(BlueprintCallable, Category = "Patrol")
+    void SetPatrolRadius(float NewRadius);
+
+    UFUNCTION(BlueprintCallable, Category = "Patrol")
+    void StartPatrolling();
+
+    UFUNCTION(BlueprintCallable, Category = "Patrol")
+    void StopPatrolling();
+
+    UFUNCTION(BlueprintCallable, Category = "Portal Defense")
+    void SetPortalTarget(APortalCore* NewTarget);
+
 protected:
     // Core Components
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Detection")
@@ -257,64 +229,65 @@ protected:
     bool bEnableEliteMode = false;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Elite AI", meta = (EditCondition = "bEnableEliteMode"))
-    EEliteDifficultyLevel EliteDifficulty = EEliteDifficultyLevel::Novice;
+    EEliteDifficultyLevel EliteDifficulty;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Elite AI")
     bool bUseEliteInCombatOnly = true;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Elite AI")
-    float EliteActivationRange = 1500.0f;
+    float EliteActivationDistance = 2000.0f;
 
-    // Patrol Data
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Patrol")
+    UPROPERTY(BlueprintReadOnly, Category = "Elite AI")
+    bool bEliteSystemsActive = false;
+
+    // Patrol State
+    UPROPERTY(BlueprintReadOnly, Category = "Patrol")
+    EPatrolState CurrentPatrolState = EPatrolState::Patrolling;
+
+    UPROPERTY(BlueprintReadOnly, Category = "Patrol")
     FVector PatrolCenter = FVector::ZeroVector;
 
     UPROPERTY(BlueprintReadOnly, Category = "Patrol")
     FVector CurrentPatrolTarget = FVector::ZeroVector;
 
     UPROPERTY(BlueprintReadOnly, Category = "Patrol")
-    EPatrolState CurrentPatrolState;
-
-    UPROPERTY(BlueprintReadOnly, Category = "Patrol")
     float PatrolAngle = 0.0f;
 
-    UPROPERTY(BlueprintReadOnly, Category = "Patrol")
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Patrol")
     bool bClockwisePatrol = true;
 
-    // Detection Data
+    UPROPERTY(BlueprintReadOnly, Category = "Patrol")
+    bool bIsPatrolling = false;
+
+    // Detection State
     UPROPERTY(BlueprintReadOnly, Category = "Detection")
     TObjectPtr<APawn> DetectedPlayer;
 
     UPROPERTY(BlueprintReadOnly, Category = "Detection")
-    EDetectionType LastDetectionType;
-
-    UPROPERTY(BlueprintReadOnly, Category = "Detection")
-    float PlayerDetectionTime = 0.0f;
-
-    UPROPERTY(BlueprintReadOnly, Category = "Detection")
-    bool bPlayerSpottedInLight = false;
-
-    UPROPERTY(BlueprintReadOnly, Category = "Detection")
-    bool bInvestigatingSound = false;
+    EDetectionType CurrentDetectionType = EDetectionType::None;
 
     UPROPERTY(BlueprintReadOnly, Category = "Detection")
     FVector LastKnownPlayerLocation = FVector::ZeroVector;
 
     UPROPERTY(BlueprintReadOnly, Category = "Detection")
-    float TimeSinceLastPlayerSighting = 0.0f;
+    float TimeSinceLastDetection = 0.0f;
 
-    // Combat Data
+    // Investigation State
+    UPROPERTY(BlueprintReadOnly, Category = "Investigation")
+    FVector InvestigationTarget = FVector::ZeroVector;
+
+    UPROPERTY(BlueprintReadOnly, Category = "Investigation")
+    float InvestigationTimeRemaining = 0.0f;
+
+    UPROPERTY(BlueprintReadOnly, Category = "Investigation")
+    bool bIsInvestigating = false;
+
+    // Combat State
     UPROPERTY(BlueprintReadOnly, Category = "Combat")
-    bool bIsEngagingPlayer = false;
+    TObjectPtr<APawn> CombatTarget;
 
     UPROPERTY(BlueprintReadOnly, Category = "Combat")
-    float EngagementStartTime = 0.0f;
-
-    UPROPERTY(BlueprintReadOnly, Category = "Combat")
-    float TotalEngagementTime = 0.0f;
-
-    UPROPERTY(BlueprintReadOnly, Category = "Combat")
-    float LastAttackTime = 0.0f;
+    float CombatStartTime = 0.0f;
 
     UPROPERTY(BlueprintReadOnly, Category = "Combat")
     int32 ConsecutiveHits = 0;
@@ -322,57 +295,11 @@ protected:
     UPROPERTY(BlueprintReadOnly, Category = "Combat")
     int32 ConsecutiveMisses = 0;
 
-    UPROPERTY(BlueprintReadOnly, Category = "Combat")
-    float LastDodgeTime = 0.0f;
-
-    UPROPERTY(BlueprintReadOnly, Category = "Combat")
-    FVector LastDodgeDirection = FVector::ZeroVector;
-
-    // ACF Action Tags - Using Proper ACF Tags
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ACF Actions")
-    FGameplayTag AttackActionTag;
-
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ACF Actions")
-    FGameplayTag PatrolActionTag;
-
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ACF Actions")
-    FGameplayTag AlertActionTag;
-
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ACF Actions")
-    FGameplayTag EquipWeaponActionTag;
-
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ACF Actions")
-    FGameplayTag UnequipWeaponActionTag;
-
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ACF Actions")
-    FGameplayTag DodgeActionTag;
-
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ACF Actions")
-    FGameplayTag FlankActionTag;
-
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ACF Actions")
-    FGameplayTag RetreatActionTag;
-
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ACF Actions")
-    FGameplayTag CounterAttackActionTag;
-
     // Portal Defense
     UPROPERTY(BlueprintReadOnly, Category = "Portal Defense")
     TObjectPtr<APortalCore> PortalTarget;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Portal Defense")
-    float MaxChaseDistance = 2000.0f;
-
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Portal Defense")
-    float PlayerThreatMultiplier = 5.0f;
-
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Portal Defense")
-    float InvestigationDuration = 10.0f;
-
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Portal Defense")
-    float ReturnToPatrolDelay = 3.0f;
-
-    // Overlord Integration
+    // AI Overlord Integration
     UPROPERTY(BlueprintReadOnly, Category = "AI Overlord")
     TObjectPtr<UAIOverlordManager> OverlordManager;
 
@@ -380,95 +307,24 @@ protected:
     TObjectPtr<UAILODManager> LODManager;
 
     UPROPERTY(BlueprintReadOnly, Category = "AI Overlord")
-    int32 AIUnitID;
-
-    // Environmental Awareness
-    UPROPERTY(BlueprintReadOnly, Category = "Environment")
-    TArray<FVector> KnownCoverPositions;
-
-    UPROPERTY(BlueprintReadOnly, Category = "Environment")
-    TArray<FVector> KnownFlankingPositions;
-
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Environment")
-    float CoverDetectionRadius = 800.0f;
-
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Environment")
-    float EnvironmentAnalysisInterval = 5.0f;
+    int32 AIUnitID = -1;
 
     // Timers
-    FTimerHandle PatrolUpdateTimer;
-    FTimerHandle CombatUpdateTimer;
-    FTimerHandle OverlordUpdateTimer;
+    FTimerHandle PatrolTimer;
     FTimerHandle InvestigationTimer;
-    FTimerHandle SoundInvestigationTimer;
-    FTimerHandle EnvironmentAnalysisTimer;
-    FTimerHandle ReturnToPatrolTimer;
+    FTimerHandle EliteUpdateTimer;
 
 private:
-    // Internal State
-    bool bInCombatState = false;
-    EAICombatState LastCombatState = EAICombatState::EIdle;
-    float CombatStateChangeTime = 0.0f;
-    float LastEnvironmentAnalysisTime = 0.0f;
-    bool bEliteSystemsActive = false;
-
-    // Combat Statistics
-    int32 TotalCombatEncounters = 0;
-    int32 SuccessfulCombatEncounters = 0;
-    float AverageCombatDuration = 0.0f;
-    float TotalCombatTime = 0.0f;
-
-    // Internal Functions
+    // Private Helper Functions
+    void InitializeEliteIntelligence();
+    void UpdateEliteSystemsActivation();
+    bool ShouldActivateEliteSystems() const;
+    void ExecuteComplexManeuver(const FString& ManeuverType, APawn* Target);
+    void UpdateCombatAdaptation();
+    bool ValidateEliteAction(const FGameplayTag& ActionTag) const;
     void FindPortalTarget();
     void SetupPortalDefense();
     void RegisterWithOverlord();
     void RegisterWithLODManager();
     void CalculateNextPatrolPoint();
-    void UpdateCombatAccuracy(float EngagementTime);
-    void UpdateCombatStatistics();
-    UACFActionsManagerComponent* GetActionsManager() const;
-
-    // Elite AI Internal Functions
-    void InitializeEliteIntelligence();
-    void UpdateEliteSystemsActivation();
-    bool ShouldActivateEliteSystems() const;
-    void ProcessEliteCombatDecision();
-    void ExecuteEliteMovementStrategy(APawn* Target);
-    void HandleEliteActionSelection(APawn* Target);
-
-    // Advanced Combat Internal Functions
-    void PerformAdvancedThreatAssessment();
-    void ExecuteComplexManeuver(const FString& ManeuverType, APawn* Target);
-    void UpdateCombatAdaptation();
-    bool ValidateEliteAction(const FGameplayTag& ActionTag) const;
-
-    // Timer Callbacks
-    UFUNCTION()
-    void OnPatrolUpdateTimer();
-
-    UFUNCTION()
-    void OnCombatUpdateTimer();
-
-    UFUNCTION()
-    void OnOverlordUpdateTimer();
-
-    UFUNCTION()
-    void OnInvestigationComplete();
-
-    UFUNCTION()
-    void OnSoundInvestigationComplete();
-
-    UFUNCTION()
-    void OnEnvironmentAnalysisTimer();
-
-    UFUNCTION()
-    void OnReturnToPatrolTimer();
-
-    // Utility Functions
-    float CalculateDistanceToPlayer() const;
-    bool IsPlayerInRange(float Range) const;
-    bool HasLineOfSightToPlayer() const;
-    FVector GetPredictedPlayerPosition(float PredictionTime) const;
-    bool IsPositionSafe(const FVector& Position) const;
-    void CleanupExpiredTimers();
 };

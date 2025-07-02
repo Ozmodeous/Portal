@@ -4,9 +4,13 @@
 
 #include "ACFAIController.h"
 #include "AILODManager.h"
+#include "Async/AsyncWork.h"
 #include "Components/ActorComponent.h"
 #include "CoreMinimal.h"
 #include "Engine/World.h"
+#include "EngineUtils.h"
+#include "GameFramework/GameModeBase.h"
+#include "HAL/PlatformFilemanager.h"
 #include "PortalDefenseAIController.h"
 #include "AIBatchProcessor.generated.h"
 
@@ -71,7 +75,7 @@ struct FAIBatchSettings {
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnBatchProcessed, EAILODLevel, LODLevel, int32, ProcessedCount);
 
 UCLASS(ClassGroup = (Custom), meta = (BlueprintSpawnableComponent))
-class AIFRAMEWORK_API UAIBatchProcessor : public UActorComponent {
+class PORTAL_API UAIBatchProcessor : public UActorComponent {
     GENERATED_BODY()
 
 public:
@@ -100,13 +104,12 @@ public:
     UFUNCTION(BlueprintCallable, Category = "AI Batch Processing")
     void RemoveAIFromBatch(AACFAIController* AIController, EAILODLevel LODLevel);
 
-    // Async Processing
     UFUNCTION(BlueprintCallable, Category = "AI Batch Processing")
     void ProcessBatchAsync(EAILODLevel LODLevel);
 
     // Performance Management
     UFUNCTION(BlueprintCallable, Category = "AI Batch Processing")
-    void AdjustBatchSizes(float FrameTime);
+    void AdjustBatchSizes();
 
     UFUNCTION(BlueprintCallable, Category = "AI Batch Processing")
     void OptimizeBatchScheduling();
@@ -119,10 +122,10 @@ public:
     int32 GetBatchSize(EAILODLevel LODLevel) const;
 
     UFUNCTION(BlueprintPure, Category = "AI Batch Processing")
-    FAIBatchData GetCurrentBatchData() const { return CurrentBatches; }
+    float GetAverageProcessingTime() const { return AverageProcessingTime; }
 
     UFUNCTION(BlueprintPure, Category = "AI Batch Processing")
-    float GetAverageProcessingTime() const { return AverageProcessingTime; }
+    FAIBatchData GetCurrentBatchData() const { return CurrentBatches; }
 
     // Settings
     UFUNCTION(BlueprintCallable, Category = "AI Batch Processing")
