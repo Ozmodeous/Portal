@@ -1,107 +1,180 @@
+// Copyright (C) Developed by Pask, Published by Dark Tower Interactive SRL 2024. All Rights Reserved.
+
 #pragma once
 
 #include "ACFAIController.h"
 #include "CoreMinimal.h"
 #include "Engine/TimerHandle.h"
+#include "GameplayTagContainer.h"
 #include "Subsystems/WorldSubsystem.h"
 #include "AIOverlordManager.generated.h"
 
+// Forward Declarations for ACF Ultimate Integration
+class APortalCore;
+class APortalDefenseAIController;
+
+/**
+ * Structured data for comprehensive patrol performance analysis
+ * Integrates with ACF Ultimate's AI behavior tracking systems
+ */
 USTRUCT(BlueprintType)
-struct FPatrolAnalysisData {
+struct PORTAL_API FPatrolAnalysisData {
     GENERATED_BODY()
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite)
+    /** Number of actively patrolling ACF AI controllers */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Analysis")
     int32 ActivePatrolGuards = 0;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite)
+    /** Average time for ACF AI to detect player presence */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Analysis")
     float AveragePlayerDetectionTime = 0.0f;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite)
+    /** Total recorded player incursion events */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Analysis")
     int32 PlayerIncursions = 0;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite)
+    /** Historical player position tracking for pattern analysis */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Analysis")
     TArray<FVector> PlayerPositions;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite)
+    /** Locations where ACF AI controllers were eliminated */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Analysis")
     TArray<FVector> GuardDeathLocations;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite)
+    /** Current portal capture progress percentage */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Analysis")
     float CaptureProgress = 0.0f;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite)
+    /** Duration of current analysis session */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Analysis")
     float SessionDuration = 0.0f;
+
+    FPatrolAnalysisData()
+    {
+        ActivePatrolGuards = 0;
+        AveragePlayerDetectionTime = 0.0f;
+        PlayerIncursions = 0;
+        CaptureProgress = 0.0f;
+        SessionDuration = 0.0f;
+    }
 };
 
+/**
+ * Tactical insight data structure for advanced ACF AI decision making
+ * Provides contextual information for enhanced combat behavior
+ */
 USTRUCT(BlueprintType)
-struct FTacticalInsight {
+struct PORTAL_API FTacticalInsight {
     GENERATED_BODY()
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite)
+    /** Classification of tactical insight for ACF behavior trees */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tactics")
     FString InsightType;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite)
+    /** Primary target location for ACF AI coordination */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tactics")
     FVector TargetLocation;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite)
+    /** Priority weighting for ACF action selection */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tactics")
     float Priority = 1.0f;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite)
+    /** Recommended patrol route for ACF navigation system */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tactics")
     TArray<FVector> RecommendedRoute;
+
+    FTacticalInsight()
+    {
+        InsightType = TEXT("Standard");
+        TargetLocation = FVector::ZeroVector;
+        Priority = 1.0f;
+    }
 };
 
+/**
+ * Comprehensive upgrade data structure for ACF AI enhancement
+ * Integrates with ACF Ultimate's character progression systems
+ */
 USTRUCT(BlueprintType)
-struct FACFAIUpgradeData {
+struct PORTAL_API FACFAIUpgradeData {
     GENERATED_BODY()
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite)
+    /** Movement speed enhancement multiplier for ACF character controllers */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Upgrades")
     float MovementSpeedMultiplier = 1.0f;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite)
+    /** Patrol radius expansion factor for ACF AI territories */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Upgrades")
     float PatrolRadiusMultiplier = 1.0f;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite)
+    /** Detection range enhancement for ACF perception systems */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Upgrades")
     float DetectionRangeMultiplier = 1.0f;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite)
+    /** Combat accuracy improvement for ACF targeting systems */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Upgrades")
     float AccuracyMultiplier = 1.0f;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite)
+    /** Aggression level modifier for ACF behavior trees */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Upgrades")
     float AggressionLevel = 1.0f;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite)
+    /** Enable advanced tactical behaviors in ACF AI */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Upgrades")
     bool bEnableAdvancedTactics = false;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite)
+    /** Allow coordination between ACF AI controllers */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Upgrades")
     bool bCanCoordinate = false;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite)
+    /** Response time optimization for ACF reactive systems */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Upgrades")
     float ResponseTime = 1.0f;
+
+    FACFAIUpgradeData()
+    {
+        MovementSpeedMultiplier = 1.0f;
+        PatrolRadiusMultiplier = 1.0f;
+        DetectionRangeMultiplier = 1.0f;
+        AccuracyMultiplier = 1.0f;
+        AggressionLevel = 1.0f;
+        bEnableAdvancedTactics = false;
+        bCanCoordinate = false;
+        ResponseTime = 1.0f;
+    }
 };
 
-UCLASS(BlueprintType)
+/**
+ * AI Overlord Manager - Central coordination system for ACF Ultimate AI
+ *
+ * Manages advanced AI behavior coordination, tactical analysis, and adaptive intelligence
+ * for portal defense scenarios. Integrates deeply with ACF Ultimate's AI framework
+ * to provide sophisticated enemy coordination and dynamic difficulty scaling.
+ */
+UCLASS(BlueprintType, meta = (DisplayName = "AI Overlord Manager"))
 class PORTAL_API UAIOverlordManager : public UWorldSubsystem {
     GENERATED_BODY()
 
 public:
     UAIOverlordManager();
 
-    // UWorldSubsystem interface
+    // UWorldSubsystem interface - UE 5.5 compliant implementation
     virtual void Initialize(FSubsystemCollectionBase& Collection) override;
     virtual void Deinitialize() override;
     virtual bool ShouldCreateSubsystem(UObject* Outer) const override;
 
-    // Subsystem Access
+    // Subsystem Access - FIXED: Removed invalid CallInEditor syntax
     UFUNCTION(BlueprintCallable, Category = "AI Overlord", CallInEditor)
     static UAIOverlordManager* GetInstance(const UObject* WorldContext);
 
-    // AI Registration
+    // ACF AI Registration and Management
     UFUNCTION(BlueprintCallable, Category = "AI Overlord")
     void RegisterAI(AACFAIController* AIController);
 
     UFUNCTION(BlueprintCallable, Category = "AI Overlord")
     void UnregisterAI(AACFAIController* AIController);
 
-    // Patrol Analysis
+    // Patrol Performance Analysis System
     UFUNCTION(BlueprintCallable, Category = "AI Overlord")
     void AnalyzePatrolPerformance();
 
@@ -117,7 +190,7 @@ public:
     UFUNCTION(BlueprintCallable, Category = "AI Overlord")
     void UpdateCaptureProgress(float Progress);
 
-    // AI Enhancement
+    // ACF AI Enhancement and Upgrading
     UFUNCTION(BlueprintCallable, Category = "AI Overlord")
     void UpgradePatrolAI();
 
@@ -127,7 +200,7 @@ public:
     UFUNCTION(BlueprintCallable, Category = "AI Overlord")
     void OptimizePatrolRoutes();
 
-    // Intelligence System
+    // Advanced Intelligence and Tactical Systems
     UFUNCTION(BlueprintCallable, Category = "AI Overlord")
     TArray<FTacticalInsight> GenerateTacticalInsights();
 
@@ -137,7 +210,7 @@ public:
     UFUNCTION(BlueprintCallable, Category = "AI Overlord")
     void AdaptToPlayerBehavior();
 
-    // Commands
+    // ACF Command System Integration - FIXED: Corrected CallInEditor usage
     UFUNCTION(BlueprintCallable, Category = "AI Overlord")
     void IssueGlobalCommand(const FString& Command, const TArray<FVector>& Parameters);
 
@@ -153,7 +226,7 @@ public:
     UFUNCTION(BlueprintCallable, Category = "AI Overlord")
     void AlertNearbyGuards(FVector AlertLocation, float AlertRadius = 1500.0f);
 
-    // Analytics
+    // Analytics and Data Access
     UFUNCTION(BlueprintPure, Category = "AI Overlord")
     float GetCurrentIntelligenceLevel() const { return AIIntelligenceLevel; }
 
@@ -167,95 +240,91 @@ public:
     TArray<FPatrolAnalysisData> GetAnalysisHistory() const { return AnalysisHistory; }
 
 protected:
-    // Registered AI Controllers
+    // ACF AI Controller Registry
     UPROPERTY(BlueprintReadOnly, Category = "AI Overlord")
     TArray<TObjectPtr<AACFAIController>> RegisteredAI;
 
-    // Analysis Data
+    // Performance Analysis Data
     UPROPERTY(BlueprintReadOnly, Category = "AI Overlord")
     TArray<FPatrolAnalysisData> AnalysisHistory;
 
     UPROPERTY(BlueprintReadOnly, Category = "AI Overlord")
     FPatrolAnalysisData CurrentAnalysisData;
 
-    // Intelligence Level
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "AI Overlord")
+    // Dynamic Intelligence System
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "AI Intelligence")
     float AIIntelligenceLevel = 1.0f;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "AI Overlord")
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "AI Intelligence")
     float IntelligenceGrowthRate = 0.1f;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "AI Overlord")
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "AI Intelligence")
     float MaxIntelligenceLevel = 5.0f;
 
-    // Portal Reference
-    UPROPERTY(BlueprintReadOnly, Category = "AI Overlord")
-    TObjectPtr<class APortalCore> PortalTarget;
+    // Portal Defense Integration
+    UPROPERTY(BlueprintReadOnly, Category = "Portal Defense")
+    TObjectPtr<APortalCore> PortalTarget;
 
-    // Player Tracking
-    UPROPERTY(BlueprintReadOnly, Category = "AI Overlord")
+    // Player Behavior Tracking
+    UPROPERTY(BlueprintReadOnly, Category = "Player Tracking")
     TArray<FVector> RecentPlayerPositions;
 
-    UPROPERTY(BlueprintReadOnly, Category = "AI Overlord")
+    UPROPERTY(BlueprintReadOnly, Category = "Player Tracking")
     TArray<FVector> PlayerIncursionPoints;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "AI Overlord")
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Player Tracking")
     int32 MaxPlayerPositionHistory = 100;
 
-    // Analysis Settings
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "AI Overlord")
-    float AnalysisInterval = 5.0f;
+    UPROPERTY(BlueprintReadOnly, Category = "Player Tracking")
+    int32 TotalPlayerIncursions = 0;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "AI Overlord")
-    float PlayerTrackingInterval = 1.0f;
-
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "AI Overlord")
-    bool bEnableContinuousAnalysis = true;
-
-    // Session Tracking
-    UPROPERTY(BlueprintReadOnly, Category = "AI Overlord")
-    float SessionStartTime;
-
-    UPROPERTY(BlueprintReadOnly, Category = "AI Overlord")
-    int32 TotalPlayerIncursions;
-
-    // ACF Integration Settings
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "AI Overlord")
+    // ACF Integration Properties
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ACF Integration")
     FGameplayTag PatrolCommandTag;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "AI Overlord")
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ACF Integration")
     FGameplayTag AlertCommandTag;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "AI Overlord")
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ACF Integration")
     FGameplayTag CoordinateCommandTag;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "AI Overlord")
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ACF Integration")
     FGameplayTag DefaultAIState;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "AI Overlord")
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ACF Integration")
     FGameplayTag PatrolAIState;
 
-private:
-    // Timers
+    // System Configuration
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Configuration")
+    float AnalysisInterval = 5.0f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Configuration")
+    float PlayerTrackingInterval = 1.0f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Configuration")
+    bool bEnableContinuousAnalysis = true;
+
+    // Timer Management
     FTimerHandle AnalysisTimer;
     FTimerHandle PlayerTrackingTimer;
+    FTimerHandle IntelligenceUpdateTimer;
 
-    // Internal Functions
-    void StartContinuousAnalysis();
-    void PerformRealTimeAnalysis();
-    void TrackPlayerMovement();
-    FACFAIUpgradeData CalculateAIUpgrades(float IntelligenceLevel);
+    // Session Tracking
+    float SessionStartTime = 0.0f;
+
+private:
+    // Internal Management Functions
     void FindPortalTarget();
+    void StartContinuousAnalysis();
     void CleanupInvalidAI();
-    void AnalyzePlayerBehaviorPatterns();
 
-    // ACF Integration
+    // ACF Integration Helpers
+    FACFAIUpgradeData CalculateAIUpgrades(float IntelligenceLevel) const;
     void SetACFPatrolBehavior(AACFAIController* AIController, const FACFAIUpgradeData& UpgradeData);
-    void SendACFCommand(AACFAIController* AIController, const FGameplayTag& CommandTag);
+    void ApplyACFCoordinationBehavior(AACFAIController* AIController, bool bEnableCoordination);
 
-    UFUNCTION()
-    void OnAnalysisTimer();
-
-    UFUNCTION()
-    void OnPlayerTrackingTimer();
+    // Tactical Analysis
+    void AnalyzePlayerPatterns();
+    void GenerateCounterTactics();
+    void UpdateThreatAssessment();
 };

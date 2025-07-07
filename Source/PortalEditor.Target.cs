@@ -12,5 +12,13 @@ public class PortalEditorTarget : TargetRules
         IncludeOrderVersion = EngineIncludeOrderVersion.Unreal5_5;
 
         ExtraModuleNames.AddRange(new string[] { "Portal" });
+
+        // Essential editor features
+        bBuildDeveloperTools = true;
+        bWithServerCode = true;
+
+        // Performance optimization for editor builds
+        bUseUnityBuild = true;
+        bUseSharedPCHs = true;
     }
 }

@@ -127,8 +127,8 @@ protected:
     virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 public:
-    // Singleton access
-    UFUNCTION(BlueprintPure, Category = "AI LOD", CallInEditor = true)
+    // Singleton access - FIXED: Removed = true from CallInEditor
+    UFUNCTION(BlueprintPure, Category = "AI LOD", CallInEditor)
     static UAILODManager* GetInstance(UWorld* World);
 
     // AI Registration

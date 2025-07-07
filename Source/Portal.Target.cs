@@ -13,7 +13,11 @@ public class PortalTarget : TargetRules
 
         ExtraModuleNames.AddRange(new string[] { "Portal" });
 
-        // Network optimization
+        // Essential multiplayer support
         bWithServerCode = true;
+
+        // Basic performance settings
+        bUseUnityBuild = true;
+        bUseSharedPCHs = true;
     }
 }

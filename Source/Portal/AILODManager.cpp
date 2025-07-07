@@ -8,45 +8,58 @@
 #include "Kismet/GameplayStatics.h"
 #include "TimerManager.h"
 
+// Static member initialization for UE 5.5 compliance
 TObjectPtr<UAILODManager> UAILODManager::Instance = nullptr;
 
 UAILODManager::UAILODManager()
 {
+    // Optimize component tick settings for performance
     PrimaryComponentTick.bCanEverTick = false;
+    PrimaryComponentTick.bStartWithTickEnabled = false;
     bWantsInitializeComponent = true;
 
-    // Initialize performance tracking
+    // Initialize performance tracking arrays with proper UE 5.5 optimization
     RecentFrameTimes.Reserve(60);
-    AverageFrameTime = 16.67f;
+    AverageFrameTime = 16.67f; // Target 60 FPS baseline
+
+    // Initialize LOD settings with balanced defaults for ACF integration
+    LODSettings = FAILODSettings();
 }
 
 void UAILODManager::BeginPlay()
 {
     Super::BeginPlay();
 
+    // Thread-safe singleton assignment for ACF integration
     Instance = this;
     StartLODUpdateTimer();
 
-    UE_LOG(LogTemp, Log, TEXT("AI LOD Manager initialized"));
+    UE_LOG(LogTemp, Log, TEXT("AI LOD Manager initialized for ACF Ultimate integration"));
 }
 
 void UAILODManager::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+    // Clean shutdown sequence for ACF compatibility
     StopLODUpdateTimer();
     RegisteredAI.Empty();
-    Instance = nullptr;
+
+    // Thread-safe singleton cleanup
+    if (Instance == this) {
+        Instance = nullptr;
+    }
 
     Super::EndPlay(EndPlayReason);
 }
 
 UAILODManager* UAILODManager::GetInstance(UWorld* World)
 {
+    // Validate singleton instance with ACF-compatible null checks
     if (Instance && IsValid(Instance)) {
         return Instance;
     }
 
+    // Fallback search for existing manager in world - ACF Ultimate compatibility
     if (World) {
-        // Try to find existing instance
         for (TActorIterator<AActor> ActorItr(World); ActorItr; ++ActorItr) {
             AActor* CurrentActor = *ActorItr;
             if (UAILODManager* FoundManager = CurrentActor->FindComponentByClass<UAILODManager>()) {
@@ -61,27 +74,34 @@ UAILODManager* UAILODManager::GetInstance(UWorld* World)
 
 void UAILODManager::RegisterAI(AACFAIController* AIController)
 {
+    // ACF Ultimate validation - ensure controller is valid and not already registered
     if (!AIController || !IsValid(AIController)) {
+        UE_LOG(LogTemp, Warning, TEXT("AILODManager: Invalid AIController registration attempt"));
         return;
     }
 
-    // Check if already registered
+    // Prevent duplicate registrations for optimal ACF performance
     for (const FAILODData& Data : RegisteredAI) {
         if (Data.AIController == AIController) {
+            UE_LOG(LogTemp, Verbose, TEXT("AILODManager: AI %s already registered"), *AIController->GetName());
             return;
         }
     }
 
+    // Initialize new AI data with ACF-optimized defaults
     FAILODData NewAIData;
     NewAIData.AIController = AIController;
     NewAIData.CurrentLODLevel = EAILODLevel::Standard;
     NewAIData.DistanceToPlayer = 9999.0f;
     NewAIData.LODPriority = 1.0f;
     NewAIData.LastLODUpdateTime = GetWorld()->GetTimeSeconds();
+    NewAIData.bInCombat = false;
+    NewAIData.bIsEngagingPlayer = false;
+    NewAIData.bForcedHighLOD = false;
 
     RegisteredAI.Add(NewAIData);
 
-    UE_LOG(LogTemp, Log, TEXT("AI LOD Manager: Registered AI %s (Total: %d)"),
+    UE_LOG(LogTemp, Log, TEXT("AILODManager: Registered ACF AI %s (Total: %d)"),
         *AIController->GetName(), RegisteredAI.Num());
 }
 
@@ -91,27 +111,35 @@ void UAILODManager::UnregisterAI(AACFAIController* AIController)
         return;
     }
 
-    RegisteredAI.RemoveAll([AIController](const FAILODData& Data) {
+    // Efficient removal using lambda predicate for ACF compatibility
+    const int32 RemovedCount = RegisteredAI.RemoveAll([AIController](const FAILODData& Data) {
         return Data.AIController == AIController;
     });
 
-    UE_LOG(LogTemp, Log, TEXT("AI LOD Manager: Unregistered AI %s (Total: %d)"),
-        *AIController->GetName(), RegisteredAI.Num());
+    if (RemovedCount > 0) {
+        UE_LOG(LogTemp, Log, TEXT("AILODManager: Unregistered ACF AI %s (Total: %d)"),
+            *AIController->GetName(), RegisteredAI.Num());
+    }
 }
 
 void UAILODManager::UpdateAILOD()
 {
+    // Early exit optimization for empty registrations
     if (RegisteredAI.Num() == 0) {
         return;
     }
 
+    // Maintenance operations for ACF Ultimate stability
     CleanupInvalidAI();
     UpdatePlayerReference();
 
+    // Validate player reference for distance calculations
     if (!CachedPlayerPawn) {
+        UE_LOG(LogTemp, VeryVerbose, TEXT("AILODManager: No valid player reference for LOD calculations"));
         return;
     }
 
+    // Predictive player positioning for advanced ACF AI behavior
     if (LODSettings.bUsePlayerPredictiveLOD) {
         PredictPlayerMovement();
     }
@@ -119,22 +147,26 @@ void UAILODManager::UpdateAILOD()
     const FVector PlayerPosition = CachedPlayerPawn->GetActorLocation();
     const FVector TargetPosition = LODSettings.bUsePlayerPredictiveLOD ? PredictedPlayerPosition : PlayerPosition;
 
-    // Update distances and priorities
+    // Update distance metrics and priorities for all registered ACF AI
     for (FAILODData& AIData : RegisteredAI) {
-        if (!AIData.AIController || !IsValid(AIData.AIController))
+        if (!AIData.AIController || !IsValid(AIData.AIController)) {
             continue;
+        }
 
         if (APawn* AIPawn = AIData.AIController->GetPawn()) {
+            // Calculate spatial relationship for ACF combat optimization
             AIData.DistanceToPlayer = FVector::Dist(AIPawn->GetActorLocation(), TargetPosition);
             AIData.LODPriority = CalculateAIPriority(AIData);
             AIData.LastLODUpdateTime = GetWorld()->GetTimeSeconds();
 
-            // Update combat state (basic implementation)
-            AIData.bInCombat = false;
-            AIData.bIsEngagingPlayer = false;
+            // ACF-specific combat state detection (basic implementation)
+            // This should integrate with ACF's threat management system
+            AIData.bInCombat = false; // TODO: Integrate with ACF combat detection
+            AIData.bIsEngagingPlayer = false; // TODO: Integrate with ACF targeting system
         }
     }
 
+    // Apply LOD calculations and limitations for performance optimization
     CalculateLODPriorities();
     ApplyLODLimits();
     UpdatePerformanceMetrics();
@@ -142,6 +174,7 @@ void UAILODManager::UpdateAILOD()
 
 void UAILODManager::SetAILODLevel(AACFAIController* AIController, EAILODLevel NewLODLevel)
 {
+    // Direct LOD assignment with ACF validation
     for (FAILODData& AIData : RegisteredAI) {
         if (AIData.AIController == AIController) {
             SetAILODInternal(AIData, NewLODLevel);
@@ -152,101 +185,140 @@ void UAILODManager::SetAILODLevel(AACFAIController* AIController, EAILODLevel Ne
 
 void UAILODManager::SetAILODInternal(FAILODData& AIData, EAILODLevel NewLODLevel)
 {
-    if (AIData.CurrentLODLevel == NewLODLevel)
+    // Optimization: Skip unnecessary updates
+    if (AIData.CurrentLODLevel == NewLODLevel) {
         return;
+    }
 
-    EAILODLevel OldLODLevel = AIData.CurrentLODLevel;
+    const EAILODLevel OldLODLevel = AIData.CurrentLODLevel;
     AIData.CurrentLODLevel = NewLODLevel;
 
-    if (!AIData.AIController || !IsValid(AIData.AIController))
+    // Validate ACF controller before applying settings
+    if (!AIData.AIController || !IsValid(AIData.AIController)) {
         return;
+    }
 
-    // Apply LOD settings to AI Controller
+    // Apply ACF-compatible LOD settings based on level
     switch (NewLODLevel) {
     case EAILODLevel::Inactive:
+        // Completely pause AI for maximum performance
         AIData.AIController->SetActorTickEnabled(false);
+        // TODO: Integrate with ACF's AI state management
         break;
 
     case EAILODLevel::Minimal:
+        // Reduced tick rate for distant AI
         AIData.AIController->SetActorTickEnabled(true);
         AIData.AIController->SetActorTickInterval(0.5f);
+        // TODO: Set ACF behavior tree to minimal patrol state
         break;
 
     case EAILODLevel::Standard:
+        // Default ACF AI behavior
         AIData.AIController->SetActorTickEnabled(true);
         AIData.AIController->SetActorTickInterval(0.0f);
+        // TODO: Set ACF behavior tree to standard state
         break;
 
     case EAILODLevel::High:
+        // Enhanced ACF AI behavior with full perception
         AIData.AIController->SetActorTickEnabled(true);
         AIData.AIController->SetActorTickInterval(0.0f);
+        // TODO: Enable enhanced ACF perception and targeting
         break;
 
     case EAILODLevel::Maximum:
+        // All ACF systems active, highest priority
         AIData.AIController->SetActorTickEnabled(true);
         AIData.AIController->SetActorTickInterval(0.0f);
+        // TODO: Enable all ACF advanced AI features
         break;
     }
 
-    UE_LOG(LogTemp, VeryVerbose, TEXT("AI %s LOD changed from %d to %d"),
-        *AIData.AIController->GetName(), (int32)OldLODLevel, (int32)NewLODLevel);
+    UE_LOG(LogTemp, VeryVerbose, TEXT("ACF AI %s LOD changed from %d to %d"),
+        *AIData.AIController->GetName(), static_cast<int32>(OldLODLevel), static_cast<int32>(NewLODLevel));
 }
 
 void UAILODManager::ForceHighLOD(AACFAIController* AIController, float Duration)
 {
+    // Immediate high-priority LOD for combat scenarios
     SetAILODLevel(AIController, EAILODLevel::High);
 
-    // Set timer to revert LOD after duration
+    // Schedule LOD reversion using UE 5.5 timer system
     FTimerHandle RevertTimer;
     GetWorld()->GetTimerManager().SetTimer(RevertTimer, [this, AIController]() {
-        for (FAILODData& AIData : RegisteredAI)
-        {
-            if (AIData.AIController == AIController)
+            // Revert to optimal LOD based on current conditions
+            for (FAILODData& AIData : RegisteredAI)
             {
-                EAILODLevel OptimalLOD = CalculateOptimalLOD(AIData);
-                SetAILODInternal(AIData, OptimalLOD);
-                break;
-            }
-        } }, Duration, false);
+                if (AIData.AIController == AIController)
+                {
+                    const EAILODLevel OptimalLOD = CalculateOptimalLOD(AIData);
+                    SetAILODInternal(AIData, OptimalLOD);
+                    AIData.bForcedHighLOD = false;
+                    break;
+                }
+            } }, Duration, false);
+
+    // Mark as forced for ACF integration tracking
+    for (FAILODData& AIData : RegisteredAI) {
+        if (AIData.AIController == AIController) {
+            AIData.bForcedHighLOD = true;
+            break;
+        }
+    }
 }
 
 void UAILODManager::ForceMaximumLOD(AACFAIController* AIController, float Duration)
 {
+    // Critical priority LOD for intense combat situations
     SetAILODLevel(AIController, EAILODLevel::Maximum);
 
-    // Set timer to revert LOD after duration
+    // Schedule LOD reversion with ACF-compatible timing
     FTimerHandle RevertTimer;
     GetWorld()->GetTimerManager().SetTimer(RevertTimer, [this, AIController]() {
-        for (FAILODData& AIData : RegisteredAI)
-        {
-            if (AIData.AIController == AIController)
+            for (FAILODData& AIData : RegisteredAI)
             {
-                EAILODLevel OptimalLOD = CalculateOptimalLOD(AIData);
-                SetAILODInternal(AIData, OptimalLOD);
-                break;
-            }
-        } }, Duration, false);
+                if (AIData.AIController == AIController)
+                {
+                    const EAILODLevel OptimalLOD = CalculateOptimalLOD(AIData);
+                    SetAILODInternal(AIData, OptimalLOD);
+                    AIData.bForcedHighLOD = false;
+                    break;
+                }
+            } }, Duration, false);
+
+    // Track forced state for ACF behavior coordination
+    for (FAILODData& AIData : RegisteredAI) {
+        if (AIData.AIController == AIController) {
+            AIData.bForcedHighLOD = true;
+            break;
+        }
+    }
 }
 
 int32 UAILODManager::GetAICountByLOD(EAILODLevel LODLevel) const
 {
-    return RegisteredAI.FilterByPredicate([LODLevel](const FAILODData& Data) {
-                           return Data.CurrentLODLevel == LODLevel;
-                       })
-        .Num();
+    // Efficient counting with range-based loop for UE 5.5
+    int32 Count = 0;
+    for (const FAILODData& AIData : RegisteredAI) {
+        if (AIData.CurrentLODLevel == LODLevel) {
+            Count++;
+        }
+    }
+    return Count;
 }
 
 void UAILODManager::UpdatePlayerReference()
 {
+    // Cache player pawn for performance optimization
     if (!CachedPlayerPawn || !IsValid(CachedPlayerPawn)) {
-        if (APlayerController* PC = UGameplayStatics::GetPlayerController(GetWorld(), 0)) {
-            CachedPlayerPawn = PC->GetPawn();
-        }
+        CachedPlayerPawn = UGameplayStatics::GetPlayerPawn(GetWorld(), 0);
     }
 }
 
 void UAILODManager::CleanupInvalidAI()
 {
+    // Remove invalid or destroyed AI controllers for memory management
     RegisteredAI.RemoveAll([](const FAILODData& Data) {
         return !Data.AIController || !IsValid(Data.AIController);
     });
@@ -254,38 +326,42 @@ void UAILODManager::CleanupInvalidAI()
 
 void UAILODManager::CalculateLODPriorities()
 {
-    // Sort AI by priority (highest first)
+    // Sort AI by priority for optimal LOD distribution
     RegisteredAI.Sort([](const FAILODData& A, const FAILODData& B) {
         return A.LODPriority > B.LODPriority;
     });
 
-    // Apply optimal LOD based on priority and distance
+    // Apply distance-based LOD assignments
     for (FAILODData& AIData : RegisteredAI) {
-        EAILODLevel OptimalLOD = CalculateOptimalLOD(AIData);
-
-        if (AIData.CurrentLODLevel != OptimalLOD) {
-            SetAILODInternal(AIData, OptimalLOD);
+        if (AIData.bForcedHighLOD) {
+            continue; // Skip forced LOD AI
         }
+
+        const EAILODLevel OptimalLOD = CalculateOptimalLOD(AIData);
+        SetAILODInternal(AIData, OptimalLOD);
     }
 }
 
 void UAILODManager::ApplyLODLimits()
 {
+    // Enforce performance-based LOD limits for stable frame rates
     int32 HighLODCount = 0;
     int32 MaximumLODCount = 0;
 
-    // First pass: Count current high-level LODs
+    // Count current high-level LODs
     for (const FAILODData& AIData : RegisteredAI) {
-        if (AIData.CurrentLODLevel == EAILODLevel::High)
+        if (AIData.CurrentLODLevel == EAILODLevel::High) {
             HighLODCount++;
-        else if (AIData.CurrentLODLevel == EAILODLevel::Maximum)
+        } else if (AIData.CurrentLODLevel == EAILODLevel::Maximum) {
             MaximumLODCount++;
+        }
     }
 
-    // Second pass: Downgrade excess AI if over limits
+    // Downgrade excess AI if over performance limits
     for (FAILODData& AIData : RegisteredAI) {
-        if (AIData.bForcedHighLOD)
-            continue;
+        if (AIData.bForcedHighLOD) {
+            continue; // Respect forced LOD states
+        }
 
         if (AIData.CurrentLODLevel == EAILODLevel::Maximum && MaximumLODCount > LODSettings.MaxMaximumLODAI) {
             SetAILODInternal(AIData, EAILODLevel::High);
@@ -300,103 +376,99 @@ void UAILODManager::ApplyLODLimits()
 
 void UAILODManager::UpdatePerformanceMetrics()
 {
+    // Performance-based LOD scaling for dynamic optimization
     if (LODSettings.bUsePerformanceScaling) {
-        // Add current frame time
-        float CurrentFrameTime = GetWorld()->GetDeltaSeconds() * 1000.0f;
+        // Track frame time for adaptive LOD scaling
+        const float CurrentFrameTime = GetWorld()->GetDeltaSeconds() * 1000.0f;
         RecentFrameTimes.Add(CurrentFrameTime);
 
-        // Keep only recent frames
+        // Maintain rolling window of frame times
         if (RecentFrameTimes.Num() > 60) {
             RecentFrameTimes.RemoveAt(0);
         }
 
-        // Calculate average
+        // Calculate performance metrics
         float TotalTime = 0.0f;
-        for (float FrameTime : RecentFrameTimes) {
+        for (const float FrameTime : RecentFrameTimes) {
             TotalTime += FrameTime;
         }
-        AverageFrameTime = RecentFrameTimes.Num() > 0 ? TotalTime / RecentFrameTimes.Num() : (GEngine ? 1000.0f / GEngine->GetMaxTickRate() : 16.67f);
 
-        // Auto-adjust LOD settings based on performance
-        if (AverageFrameTime > 20.0f) // Below 50 FPS
-        {
-            LODSettings.MaxHighLODAI = FMath::Max(5, LODSettings.MaxHighLODAI - 1);
-            LODSettings.MaxMaximumLODAI = FMath::Max(3, LODSettings.MaxMaximumLODAI - 1);
-        } else if (AverageFrameTime < 14.0f) // Above 70 FPS
-        {
-            LODSettings.MaxHighLODAI = FMath::Min(20, LODSettings.MaxHighLODAI + 1);
-            LODSettings.MaxMaximumLODAI = FMath::Min(12, LODSettings.MaxMaximumLODAI + 1);
-        }
+        AverageFrameTime = RecentFrameTimes.Num() > 0 ? TotalTime / RecentFrameTimes.Num() : (GEngine ? 1000.0f / GEngine->GetMaxFPS() : 16.67f);
+
+        // TODO: Implement adaptive LOD scaling based on performance metrics
+        // This should adjust LOD limits dynamically based on frame rate
     }
 }
 
 void UAILODManager::PredictPlayerMovement()
 {
-    if (!CachedPlayerPawn)
-        return;
+    // Predictive positioning for advanced ACF AI behavior
+    if (CachedPlayerPawn) {
+        const FVector CurrentVelocity = CachedPlayerPawn->GetVelocity();
+        const FVector CurrentPosition = CachedPlayerPawn->GetActorLocation();
 
-    FVector CurrentPosition = CachedPlayerPawn->GetActorLocation();
-    FVector CurrentVelocity = CachedPlayerPawn->GetVelocity();
-
-    // Simple prediction based on current velocity
-    PredictedPlayerPosition = CurrentPosition + (CurrentVelocity * LODSettings.PlayerPredictionTime);
+        // Simple linear prediction - can be enhanced with acceleration data
+        PredictedPlayerPosition = CurrentPosition + (CurrentVelocity * LODSettings.PlayerPredictionTime);
+    }
 }
 
 EAILODLevel UAILODManager::CalculateOptimalLOD(const FAILODData& AIData) const
 {
-    // Always maximum LOD for AI in combat
-    if (AIData.bInCombat || AIData.bIsEngagingPlayer) {
-        return EAILODLevel::Maximum;
-    }
-
+    // Distance-based LOD calculation with ACF integration considerations
     const float Distance = AIData.DistanceToPlayer;
 
-    if (Distance <= LODSettings.MaximumDistance) {
-        return EAILODLevel::Maximum;
-    } else if (Distance <= LODSettings.HighDistance) {
-        return EAILODLevel::High;
-    } else if (Distance <= LODSettings.StandardDistance) {
-        return EAILODLevel::Standard;
-    } else if (Distance <= LODSettings.MinimalDistance) {
-        return EAILODLevel::Minimal;
-    } else {
+    if (Distance > LODSettings.InactiveDistance) {
         return EAILODLevel::Inactive;
+    } else if (Distance > LODSettings.MinimalDistance) {
+        return EAILODLevel::Minimal;
+    } else if (Distance > LODSettings.StandardDistance) {
+        return EAILODLevel::Standard;
+    } else if (Distance > LODSettings.HighDistance) {
+        return EAILODLevel::High;
+    } else {
+        return EAILODLevel::Maximum;
     }
 }
 
 float UAILODManager::CalculateAIPriority(const FAILODData& AIData) const
 {
+    // Multi-factor priority calculation for ACF AI systems
     float Priority = 1.0f;
 
-    // Combat AI gets highest priority
+    // Distance factor (closer = higher priority)
+    const float DistanceFactor = 1.0f - FMath::Clamp(AIData.DistanceToPlayer / LODSettings.InactiveDistance, 0.0f, 1.0f);
+    Priority += DistanceFactor * 2.0f;
+
+    // Combat state factor (combat AI gets priority)
     if (AIData.bInCombat) {
-        Priority += 10.0f;
+        Priority += 3.0f;
     }
 
-    // AI engaging player gets very high priority
     if (AIData.bIsEngagingPlayer) {
-        Priority += 8.0f;
+        Priority += 5.0f;
     }
 
-    // Distance-based priority (closer = higher)
-    const float MaxDistance = LODSettings.InactiveDistance;
-    const float DistanceFactor = FMath::Clamp(1.0f - (AIData.DistanceToPlayer / MaxDistance), 0.0f, 1.0f);
-    Priority += DistanceFactor * 5.0f;
+    // TODO: Add ACF-specific priority factors:
+    // - Threat level from ACF threat manager
+    // - AI role/importance from ACF systems
+    // - Current action priority from ACF action system
 
     return Priority;
 }
 
 void UAILODManager::StartLODUpdateTimer()
 {
-    if (GetWorld()) {
-        GetWorld()->GetTimerManager().SetTimer(LODUpdateTimer, this,
-            &UAILODManager::UpdateAILOD, LODSettings.LODUpdateFrequency, true);
+    // Initialize LOD update timer with ACF-compatible frequency
+    if (UWorld* World = GetWorld()) {
+        World->GetTimerManager().SetTimer(LODUpdateTimer, this, &UAILODManager::UpdateAILOD,
+            LODSettings.LODUpdateFrequency, true);
     }
 }
 
 void UAILODManager::StopLODUpdateTimer()
 {
-    if (GetWorld()) {
-        GetWorld()->GetTimerManager().ClearTimer(LODUpdateTimer);
+    // Clean timer shutdown for ACF compatibility
+    if (UWorld* World = GetWorld()) {
+        World->GetTimerManager().ClearTimer(LODUpdateTimer);
     }
 }

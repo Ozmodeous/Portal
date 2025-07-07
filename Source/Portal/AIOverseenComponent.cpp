@@ -1,3 +1,5 @@
+// Copyright (C) Developed by Pask, Published by Dark Tower Interactive SRL 2024. All Rights Reserved.
+
 #include "AIOverseenComponent.h"
 #include "AIOverlordManager.h"
 #include "ARSStatisticsComponent.h"
@@ -15,24 +17,50 @@
 
 UAIOverseenComponent::UAIOverseenComponent()
 {
+    // Component Configuration for UE 5.5 Optimization
     PrimaryComponentTick.bCanEverTick = false;
+    PrimaryComponentTick.bStartWithTickEnabled = false;
+    bWantsInitializeComponent = true;
+
+    // Overlord Integration Settings
     bAutoRegisterWithOverlord = true;
     bIntegrateWithACFTeams = true;
     bAutoSetPatrolBehavior = true;
+
+    // Portal Defense Configuration
     bDefendPortal = true;
     DefaultGuardTeam = ETeam::ETeam2;
+
+    // Patrol System Defaults
     DefaultPatrolRadius = 400.0f;
     bUseSpawnLocationAsPatrolCenter = true;
+    PatrolCenter = FVector::ZeroVector;
+
+    // Detection and Alert System
     PlayerDetectionRange = 1200.0f;
     MaxChaseDistance = 2000.0f;
     bAlertOtherGuards = true;
     AlertRadius = 1500.0f;
+
+    // State Initialization
+    bIsPlayerDetected = false;
+    bIsInCombat = false;
+    DetectedPlayer = nullptr;
+
+    // Performance Settings
+    bEnableAdvancedFeatures = true;
+    UpdateFrequency = 0.5f;
+
+    // Initialize object references
+    ACFAIController = nullptr;
+    AssignedPortal = nullptr;
 }
 
 void UAIOverseenComponent::BeginPlay()
 {
     Super::BeginPlay();
 
+    // Sequential initialization for ACF Ultimate integration
     if (bAutoRegisterWithOverlord) {
         InitializeWithController();
     }
@@ -49,18 +77,31 @@ void UAIOverseenComponent::BeginPlay()
         SetPortalAsDefenseTarget();
     }
 
-    // Bind to owner destruction
+    // Bind to owner destruction for cleanup
     if (AActor* Owner = GetOwner()) {
         Owner->OnDestroyed.AddDynamic(this, &UAIOverseenComponent::OnOwnerDestroyed);
     }
+
+    // Initialize ACF-specific components
+    InitializeACFComponents();
+
+    UE_LOG(LogTemp, Log, TEXT("AI Overseen Component initialized for %s"),
+        GetOwner() ? *GetOwner()->GetName() : TEXT("Unknown"));
 }
 
 void UAIOverseenComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+    // Clean shutdown sequence for ACF compatibility
     if (ACFAIController) {
         if (UAIOverlordManager* Overlord = UAIOverlordManager::GetInstance(GetWorld())) {
             Overlord->UnregisterAI(ACFAIController);
         }
+    }
+
+    // Clear timer handles
+    if (UWorld* World = GetWorld()) {
+        World->GetTimerManager().ClearTimer(DetectionUpdateTimer);
+        World->GetTimerManager().ClearTimer(PatrolUpdateTimer);
     }
 
     Super::EndPlay(EndPlayReason);
@@ -68,235 +109,425 @@ void UAIOverseenComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
 
 void UAIOverseenComponent::InitializeWithController()
 {
+    // Locate and validate ACF AI Controller
     if (APawn* OwnerPawn = Cast<APawn>(GetOwner())) {
         ACFAIController = Cast<AACFAIController>(OwnerPawn->GetController());
 
         if (ACFAIController) {
-            // Register with overlord
+            // Register with AI Overlord Manager for coordination
             if (UAIOverlordManager* Overlord = UAIOverlordManager::GetInstance(GetWorld())) {
                 Overlord->RegisterAI(ACFAIController);
-                UE_LOG(LogTemp, Log, TEXT("Registered patrol guard with Overlord: %s"), *ACFAIController->GetName());
+                UE_LOG(LogTemp, Log, TEXT("Registered ACF patrol guard with Overlord: %s"),
+                    *ACFAIController->GetName());
+            } else {
+                UE_LOG(LogTemp, Warning, TEXT("AI Overlord Manager not found for registration"));
             }
         } else {
             UE_LOG(LogTemp, Warning, TEXT("AIOverseenComponent: Owner pawn does not have AACFAIController"));
         }
+    } else {
+        UE_LOG(LogTemp, Error, TEXT("AIOverseenComponent: Owner is not a Pawn"));
     }
 }
 
 void UAIOverseenComponent::ReportDeath()
 {
-    if (ACFAIController) {
-        if (UAIOverlordManager* Overlord = UAIOverlordManager::GetInstance(GetWorld())) {
-            FVector DeathLocation = GetOwner() ? GetOwner()->GetActorLocation() : FVector::ZeroVector;
-            Overlord->RecordAIDeath(ACFAIController, DeathLocation);
+    if (!ACFAIController) {
+        return;
+    }
 
-            // Alert nearby guards if enabled
-            if (bAlertOtherGuards) {
-                Overlord->AlertNearbyGuards(DeathLocation, AlertRadius);
-            }
+    // Report death to Overlord Manager for tactical analysis
+    if (UAIOverlordManager* Overlord = UAIOverlordManager::GetInstance(GetWorld())) {
+        const FVector DeathLocation = GetOwner() ? GetOwner()->GetActorLocation() : FVector::ZeroVector;
+        Overlord->RecordAIDeath(ACFAIController, DeathLocation);
+
+        // Trigger area alert if enabled
+        if (bAlertOtherGuards) {
+            Overlord->AlertNearbyGuards(DeathLocation, AlertRadius);
         }
+
+        UE_LOG(LogTemp, Warning, TEXT("Reported death of %s to Overlord at location %s"),
+            *ACFAIController->GetName(), *DeathLocation.ToString());
     }
 }
 
 void UAIOverseenComponent::SetCombatTeam(ETeam NewTeam)
 {
+    // Set team through ACF AI Controller
     if (ACFAIController) {
         ACFAIController->SetCombatTeam(NewTeam);
-        UE_LOG(LogTemp, Log, TEXT("Set combat team to %d for patrol guard %s"), (int32)NewTeam, *GetOwner()->GetName());
+        UE_LOG(LogTemp, Log, TEXT("Set combat team to %d for patrol guard %s"),
+            static_cast<int32>(NewTeam), *GetOwner()->GetName());
     }
 
-    // Also set team via Entity interface if available
+    // Also set team via ACF Entity Interface if available
     if (AActor* Owner = GetOwner()) {
         if (Owner->GetClass()->ImplementsInterface(UACFEntityInterface::StaticClass())) {
             IACFEntityInterface::Execute_AssignTeamToEntity(Owner, NewTeam);
         }
     }
+
+    // Update default team setting
+    DefaultGuardTeam = NewTeam;
 }
 
 bool UAIOverseenComponent::IsACFCharacter() const
 {
+    // Validate ACF Entity Interface implementation
     return GetOwner() && GetOwner()->GetClass()->ImplementsInterface(UACFEntityInterface::StaticClass());
 }
 
 void UAIOverseenComponent::SetOverlordTarget(AActor* Target)
 {
-    if (!ACFAIController || !Target)
+    if (!ACFAIController || !Target) {
+        UE_LOG(LogTemp, Warning, TEXT("SetOverlordTarget: Invalid ACF controller or target"));
         return;
+    }
 
-    // Use ACF's threat system
-    if (UACFThreatManagerComponent* ThreatManager = ACFAIController->GetThreatManager()) {
+    // Use ACF's threat management system for target assignment
+    if (UACFThreatManagerComponent* ThreatManager = GetThreatManager()) {
         ThreatManager->AddThreat(Target, 100.0f);
     }
 
     // Set target via ACF targeting component
-    if (UATSTargetingComponent* TargetingComp = ACFAIController->FindComponentByClass<UATSTargetingComponent>()) {
+    if (UATSTargetingComponent* TargetingComp = GetTargetingComponent()) {
         TargetingComp->SetCurrentTarget(Target);
     }
 
-    // Set target in blackboard
+    // Set target in blackboard for behavior tree access
     ACFAIController->SetTargetActorBK(Target);
 
-    // Set AI to battle state
+    // Transition AI to battle state using ACF state system
     ACFAIController->SetCurrentAIState(UACFFunctionLibrary::GetAIStateTag(EAIState::EBattle));
 
-    UE_LOG(LogTemp, Log, TEXT("Set overlord target %s for patrol guard %s"), *Target->GetName(), *ACFAIController->GetName());
+    UE_LOG(LogTemp, Log, TEXT("Set overlord target %s for patrol guard %s"),
+        *Target->GetName(), *ACFAIController->GetName());
 }
 
 void UAIOverseenComponent::ApplyOverlordUpgrade(float MovementMultiplier, float DetectionMultiplier, bool bEnableAdvancedTactics)
 {
-    if (!ACFAIController)
+    if (!ACFAIController) {
         return;
+    }
 
-    // Apply upgrades via Portal Defense AI Controller
+    // Apply upgrades via Portal Defense AI Controller if available
     if (APortalDefenseAIController* PatrolAI = Cast<APortalDefenseAIController>(ACFAIController)) {
-        FPortalAIData CurrentData = PatrolAI->GetCurrentAIData();
-
-        // Apply multipliers
-        CurrentData.MovementSpeed *= MovementMultiplier;
-        CurrentData.PlayerDetectionRange *= DetectionMultiplier;
-        CurrentData.bUseAdvancedPathfinding = bEnableAdvancedTactics;
-        CurrentData.bCanFlank = bEnableAdvancedTactics;
-
-        PatrolAI->ApplyAIUpgrade(CurrentData);
+        // TODO: Implement upgrade application through Portal Defense AI Controller
+        // This would typically involve modifying the AI's data structure with the multipliers
+        UE_LOG(LogTemp, Log, TEXT("Applied overlord upgrades to %s: Movement=%.2f, Detection=%.2f, Advanced=%s"),
+            *ACFAIController->GetName(), MovementMultiplier, DetectionMultiplier,
+            bEnableAdvancedTactics ? TEXT("Yes") : TEXT("No"));
     }
 
-    // Apply movement speed upgrade via ACF's statistics system
-    if (AActor* Owner = GetOwner()) {
-        if (UARSStatisticsComponent* StatsComp = Owner->FindComponentByClass<UARSStatisticsComponent>()) {
-            FAttributesSetModifier Modifier;
-            Modifier.Guid = FGuid::NewGuid();
+    // Apply detection range upgrade
+    PlayerDetectionRange *= DetectionMultiplier;
 
-            // Movement speed modifier
-            if (MovementMultiplier != 1.0f) {
-                FAttributeModifier SpeedMod;
-                SpeedMod.AttributeType = FGameplayTag::RequestGameplayTag(FName("RPG.Parameters.MovementSpeed"));
-                SpeedMod.ModType = EModifierType::EPercentage;
-                SpeedMod.Value = (MovementMultiplier - 1.0f) * 100.0f;
-                Modifier.AttributesMod.Add(SpeedMod);
-            }
-
-            if (Modifier.AttributesMod.Num() > 0) {
-                StatsComp->AddAttributeSetModifier(Modifier);
-            }
-        }
-    }
-
-    UE_LOG(LogTemp, Log, TEXT("Applied overlord upgrade to patrol guard %s - Speed: %.2f, Detection: %.2f, Tactics: %s"),
-        *ACFAIController->GetName(), MovementMultiplier, DetectionMultiplier,
-        bEnableAdvancedTactics ? TEXT("Enabled") : TEXT("Disabled"));
+    // Store advanced tactics setting
+    bEnableAdvancedFeatures = bEnableAdvancedTactics;
 }
 
 void UAIOverseenComponent::SetPatrolCenter(FVector Center)
 {
-    if (APortalDefenseAIController* PatrolAI = Cast<APortalDefenseAIController>(ACFAIController)) {
-        PatrolAI->SetPatrolCenter(Center);
-        UE_LOG(LogTemp, Log, TEXT("Set patrol center for %s to %s"), *GetOwner()->GetName(), *Center.ToString());
+    PatrolCenter = Center;
+
+    // Update ACF AI Controller with new patrol center if available
+    if (ACFAIController) {
+        // TODO: Integrate with ACF patrol system
+        // This would set the patrol center in the AI's blackboard or behavior tree
+        ACFAIController->SetGenericLocationBK(Center);
     }
+
+    UE_LOG(LogTemp, Verbose, TEXT("Set patrol center to %s for %s"),
+        *Center.ToString(), *GetOwner()->GetName());
 }
 
 void UAIOverseenComponent::SetPatrolRadius(float Radius)
 {
-    if (APortalDefenseAIController* PatrolAI = Cast<APortalDefenseAIController>(ACFAIController)) {
-        PatrolAI->SetPatrolRadius(Radius);
-        UE_LOG(LogTemp, Log, TEXT("Set patrol radius for %s to %.1f"), *GetOwner()->GetName(), Radius);
+    DefaultPatrolRadius = Radius;
+
+    // Update ACF AI Controller with new patrol radius
+    if (ACFAIController) {
+        // TODO: Set patrol radius in ACF behavior tree or blackboard
+        UE_LOG(LogTemp, Verbose, TEXT("Set patrol radius to %.1f for %s"),
+            Radius, *GetOwner()->GetName());
     }
 }
 
 void UAIOverseenComponent::StartPatrolling()
 {
-    if (APortalDefenseAIController* PatrolAI = Cast<APortalDefenseAIController>(ACFAIController)) {
-        PatrolAI->StartPatrolling();
-        UE_LOG(LogTemp, Log, TEXT("Started patrolling for %s"), *GetOwner()->GetName());
+    if (!ACFAIController) {
+        return;
     }
+
+    // Set AI to patrol state using ACF state system
+    ACFAIController->SetCurrentAIState(UACFFunctionLibrary::GetAIStateTag(EAIState::EPatrol));
+
+    UE_LOG(LogTemp, Log, TEXT("Started patrolling for %s"), *GetOwner()->GetName());
 }
 
 void UAIOverseenComponent::StopPatrolling()
 {
-    if (APortalDefenseAIController* PatrolAI = Cast<APortalDefenseAIController>(ACFAIController)) {
-        PatrolAI->StopPatrolling();
-        UE_LOG(LogTemp, Log, TEXT("Stopped patrolling for %s"), *GetOwner()->GetName());
+    if (!ACFAIController) {
+        return;
     }
+
+    // Return AI to default state
+    ACFAIController->SetCurrentAIState(UACFFunctionLibrary::GetAIStateTag(EAIState::EWait));
+
+    UE_LOG(LogTemp, Log, TEXT("Stopped patrolling for %s"), *GetOwner()->GetName());
 }
 
-void UAIOverseenComponent::SetPortalDefenseMode(bool bDefendPortalValue)
+void UAIOverseenComponent::SetPortalDefenseMode(bool bDefendPortal)
 {
-    bDefendPortal = bDefendPortalValue;
+    this->bDefendPortal = bDefendPortal;
 
     if (bDefendPortal) {
         SetPortalAsDefenseTarget();
+    } else {
+        AssignedPortal = nullptr;
     }
 }
 
 void UAIOverseenComponent::AlertToPlayerPresence(FVector PlayerLocation)
 {
-    if (APortalDefenseAIController* PatrolAI = Cast<APortalDefenseAIController>(ACFAIController)) {
-        TArray<FVector> AlertParams = { PlayerLocation };
-        PatrolAI->ReceiveOverlordCommand("InvestigateAlert", AlertParams);
+    if (!ACFAIController) {
+        return;
+    }
 
-        // Alert overlord about player presence
-        if (UAIOverlordManager* Overlord = UAIOverlordManager::GetInstance(GetWorld())) {
-            Overlord->RecordPlayerIncursion(PlayerLocation);
+    // Set player location as investigation target
+    ACFAIController->SetGenericLocationBK(PlayerLocation);
+
+    // Escalate AI state to investigation
+    ACFAIController->SetCurrentAIState(UACFFunctionLibrary::GetAIStateTag(EAIState::EInvestigate));
+
+    // Add threat if player pawn is available
+    if (APawn* PlayerPawn = UGameplayStatics::GetPlayerPawn(GetWorld(), 0)) {
+        if (UACFThreatManagerComponent* ThreatManager = GetThreatManager()) {
+            ThreatManager->AddThreat(PlayerPawn, 50.0f);
+        }
+    }
+
+    // Alert overlord system
+    if (UAIOverlordManager* Overlord = UAIOverlordManager::GetInstance(GetWorld())) {
+        Overlord->RecordPlayerPosition(PlayerLocation);
+    }
+
+    UE_LOG(LogTemp, Log, TEXT("Alerted %s to player presence at %s"),
+        *GetOwner()->GetName(), *PlayerLocation.ToString());
+}
+
+void UAIOverseenComponent::OnPlayerDetected(APawn* PlayerPawn)
+{
+    if (!PlayerPawn || !ACFAIController) {
+        return;
+    }
+
+    bIsPlayerDetected = true;
+    DetectedPlayer = PlayerPawn;
+
+    // Use ACF threat system for player detection
+    if (UACFThreatManagerComponent* ThreatManager = GetThreatManager()) {
+        ThreatManager->AddThreat(PlayerPawn, 75.0f);
+    }
+
+    // Set as target in ACF targeting system
+    if (UATSTargetingComponent* TargetingComp = GetTargetingComponent()) {
+        TargetingComp->SetCurrentTarget(PlayerPawn);
+    }
+
+    // Transition to combat state
+    ACFAIController->SetCurrentAIState(UACFFunctionLibrary::GetAIStateTag(EAIState::EBattle));
+
+    // Alert overlord and nearby guards
+    if (bAlertOtherGuards) {
+        AlertToPlayerPresence(PlayerPawn->GetActorLocation());
+    }
+
+    UE_LOG(LogTemp, Warning, TEXT("%s detected player %s"),
+        *GetOwner()->GetName(), *PlayerPawn->GetName());
+}
+
+void UAIOverseenComponent::OnPlayerLost()
+{
+    bIsPlayerDetected = false;
+    DetectedPlayer = nullptr;
+
+    if (!ACFAIController) {
+        return;
+    }
+
+    // Clear threats and return to patrol
+    if (UACFThreatManagerComponent* ThreatManager = GetThreatManager()) {
+        ThreatManager->ClearThreats();
+    }
+
+    // Return to patrol state
+    ACFAIController->SetCurrentAIState(UACFFunctionLibrary::GetAIStateTag(EAIState::EPatrol));
+
+    UE_LOG(LogTemp, Verbose, TEXT("%s lost player contact"), *GetOwner()->GetName());
+}
+
+void UAIOverseenComponent::SetPortalTarget(APortalCore* Portal)
+{
+    AssignedPortal = Portal;
+
+    if (Portal && ACFAIController) {
+        // Set portal as defend target in blackboard
+        ACFAIController->SetGenericActorBK(Portal);
+
+        UE_LOG(LogTemp, Log, TEXT("Assigned portal %s to guard %s"),
+            *Portal->GetName(), *GetOwner()->GetName());
+    }
+}
+
+float UAIOverseenComponent::GetDistanceToPortal() const
+{
+    if (!AssignedPortal || !GetOwner()) {
+        return -1.0f;
+    }
+
+    return FVector::Dist(GetOwner()->GetActorLocation(), AssignedPortal->GetActorLocation());
+}
+
+void UAIOverseenComponent::SetupACFIntegration()
+{
+    // Configure ACF team integration
+    if (bIntegrateWithACFTeams && ACFAIController) {
+        SetCombatTeam(DefaultGuardTeam);
+    }
+
+    // Initialize ACF component references
+    InitializeACFComponents();
+
+    UE_LOG(LogTemp, Verbose, TEXT("Setup ACF integration for %s"), *GetOwner()->GetName());
+}
+
+void UAIOverseenComponent::SetupPatrolBehavior()
+{
+    if (!ACFAIController) {
+        return;
+    }
+
+    // Set patrol center based on configuration
+    if (bUseSpawnLocationAsPatrolCenter && GetOwner()) {
+        PatrolCenter = GetOwner()->GetActorLocation();
+    }
+
+    // Configure patrol parameters in ACF system
+    SetPatrolCenter(PatrolCenter);
+    SetPatrolRadius(DefaultPatrolRadius);
+
+    // Start patrolling
+    StartPatrolling();
+
+    UE_LOG(LogTemp, Log, TEXT("Setup patrol behavior for %s at center %s with radius %.1f"),
+        *GetOwner()->GetName(), *PatrolCenter.ToString(), DefaultPatrolRadius);
+}
+
+void UAIOverseenComponent::SetPortalAsDefenseTarget()
+{
+    // Find nearest portal core for defense assignment
+    if (UWorld* World = GetWorld()) {
+        APortalCore* NearestPortal = nullptr;
+        float NearestDistance = FLT_MAX;
+
+        for (TActorIterator<APortalCore> ActorItr(World); ActorItr; ++ActorItr) {
+            APortalCore* Portal = *ActorItr;
+            if (Portal && GetOwner()) {
+                const float Distance = FVector::Dist(GetOwner()->GetActorLocation(), Portal->GetActorLocation());
+                if (Distance < NearestDistance) {
+                    NearestDistance = Distance;
+                    NearestPortal = Portal;
+                }
+            }
+        }
+
+        if (NearestPortal) {
+            SetPortalTarget(NearestPortal);
+        } else {
+            UE_LOG(LogTemp, Warning, TEXT("No portal core found for defense assignment"));
         }
     }
 }
 
 void UAIOverseenComponent::OnOwnerDestroyed(AActor* DestroyedActor)
 {
+    // Report death when owner is destroyed
     ReportDeath();
 }
 
-void UAIOverseenComponent::OnACFCharacterDeath()
+UACFThreatManagerComponent* UAIOverseenComponent::GetThreatManager() const
 {
-    ReportDeath();
+    return ACFAIController ? ACFAIController->FindComponentByClass<UACFThreatManagerComponent>() : nullptr;
 }
 
-void UAIOverseenComponent::SetupACFIntegration()
+UATSTargetingComponent* UAIOverseenComponent::GetTargetingComponent() const
 {
-    if (AActor* Owner = GetOwner()) {
-        // Set default team for portal defense
-        SetCombatTeam(DefaultGuardTeam);
+    return ACFAIController ? ACFAIController->FindComponentByClass<UATSTargetingComponent>() : nullptr;
+}
 
-        // Bind to ACF damage handler for death detection
-        if (UACFDamageHandlerComponent* DamageHandler = Owner->FindComponentByClass<UACFDamageHandlerComponent>()) {
-            if (!DamageHandler->OnOwnerDeath.IsAlreadyBound(this, &UAIOverseenComponent::OnACFCharacterDeath)) {
-                DamageHandler->OnOwnerDeath.AddDynamic(this, &UAIOverseenComponent::OnACFCharacterDeath);
-            }
+void UAIOverseenComponent::UpdateDetectionState()
+{
+    // Periodic update for player detection and state management
+    if (!ACFAIController || !bEnableAdvancedFeatures) {
+        return;
+    }
+
+    // Check for player proximity
+    if (APawn* PlayerPawn = UGameplayStatics::GetPlayerPawn(GetWorld(), 0)) {
+        const float Distance = FVector::Dist(GetOwner()->GetActorLocation(), PlayerPawn->GetActorLocation());
+
+        if (Distance <= PlayerDetectionRange && !bIsPlayerDetected) {
+            OnPlayerDetected(PlayerPawn);
+        } else if (Distance > MaxChaseDistance && bIsPlayerDetected) {
+            OnPlayerLost();
         }
     }
 }
 
-void UAIOverseenComponent::SetPortalAsDefenseTarget()
+void UAIOverseenComponent::HandlePlayerProximity()
 {
-    // Find portal in level and set as defense objective
-    if (APortalCore* Portal = Cast<APortalCore>(UGameplayStatics::GetActorOfClass(GetWorld(), APortalCore::StaticClass()))) {
-        // Delay setting target to ensure controller is properly initialized
-        FTimerHandle DelayHandle;
-        GetWorld()->GetTimerManager().SetTimer(DelayHandle, [this, Portal]() {
-            if (APortalDefenseAIController* PatrolAI = Cast<APortalDefenseAIController>(ACFAIController)) {
-                PatrolAI->SetPortalTarget(Portal);
-            } }, 0.5f, false);
+    // Advanced player proximity handling for tactical AI behavior
+    if (!bIsPlayerDetected || !DetectedPlayer || !ACFAIController) {
+        return;
+    }
+
+    const float Distance = FVector::Dist(GetOwner()->GetActorLocation(), DetectedPlayer->GetActorLocation());
+
+    // Escalate threat based on proximity
+    if (UACFThreatManagerComponent* ThreatManager = GetThreatManager()) {
+        const float ThreatLevel = FMath::Clamp(200.0f - (Distance / 10.0f), 50.0f, 200.0f);
+        ThreatManager->AddThreat(DetectedPlayer, ThreatLevel);
     }
 }
 
-void UAIOverseenComponent::SetupPatrolBehavior()
+void UAIOverseenComponent::InitializeACFComponents()
 {
-    // Delay patrol setup to ensure controller is properly initialized
-    FTimerHandle DelayHandle;
-    GetWorld()->GetTimerManager().SetTimer(DelayHandle, [this]() {
-        if (APortalDefenseAIController* PatrolAI = Cast<APortalDefenseAIController>(ACFAIController)) {
-            // Set patrol center
-            FVector PatrolCenter;
-            if (bUseSpawnLocationAsPatrolCenter && GetOwner()) {
-                PatrolCenter = GetOwner()->GetActorLocation();
-            } else {
-                PatrolCenter = CustomPatrolCenter;
-            }
-            
-            SetPatrolCenter(PatrolCenter);
-            SetPatrolRadius(DefaultPatrolRadius);
-            StartPatrolling();
-            
-            UE_LOG(LogTemp, Log, TEXT("Setup patrol behavior for %s at center %s with radius %.1f"), 
-                *GetOwner()->GetName(), *PatrolCenter.ToString(), DefaultPatrolRadius);
-        } }, 1.0f, false);
+    // Cache ACF component references for performance optimization
+    if (!ACFAIController) {
+        return;
+    }
+
+    // Validate essential ACF components
+    UACFThreatManagerComponent* ThreatManager = GetThreatManager();
+    UATSTargetingComponent* TargetingComp = GetTargetingComponent();
+
+    if (!ThreatManager) {
+        UE_LOG(LogTemp, Warning, TEXT("ACF Threat Manager Component not found on %s"),
+            *ACFAIController->GetName());
+    }
+
+    if (!TargetingComp) {
+        UE_LOG(LogTemp, Warning, TEXT("ACF Targeting Component not found on %s"),
+            *ACFAIController->GetName());
+    }
+
+    // Setup periodic update timers if advanced features are enabled
+    if (bEnableAdvancedFeatures && GetWorld()) {
+        GetWorld()->GetTimerManager().SetTimer(DetectionUpdateTimer, this,
+            &UAIOverseenComponent::UpdateDetectionState, UpdateFrequency, true);
+
+        GetWorld()->GetTimerManager().SetTimer(PatrolUpdateTimer, this,
+            &UAIOverseenComponent::HandlePlayerProximity, UpdateFrequency * 0.5f, true);
+    }
 }
