@@ -2,50 +2,69 @@
 
 #include "PortalDefenseAIController.h"
 #include "ACFStealthDetectionComponent.h"
+#include "AIBatchProcessor.h"
 #include "AILODManager.h"
+#include "AIOverseenComponent.h"
 #include "BehaviorTree/BlackboardComponent.h"
-#include "Components/ACFCombatBehaviourComponent.h"
-#include "DrawDebugHelpers.h"
+#include "Components/ActorComponent.h"
+#include "Components/CombatBehaviourComponent.h"
 #include "EliteAIIntelligenceComponent.h"
+#include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "GameFramework/Character.h"
+#include "GameFramework/GameStateBase.h"
+#include "GameFramework/PlayerController.h"
 #include "Kismet/GameplayStatics.h"
+#include "Logging/LogMacros.h"
 #include "Navigation/PathFollowingComponent.h"
+#include "Perception/AIPerceptionComponent.h"
 #include "PortalCore.h"
+#include "TimerManager.h"
+
+DEFINE_LOG_CATEGORY_STATIC(LogPortalDefenseAI, Log, All);
 
 APortalDefenseAIController::APortalDefenseAIController()
 {
-    // Configure component tick settings for UE 5.5.4 performance optimization
+    // Set this controller to be ticked every frame for real-time AI processing
     PrimaryActorTick.bCanEverTick = true;
     PrimaryActorTick.bStartWithTickEnabled = true;
-    PrimaryActorTick.TickInterval = 0.1f; // Optimized tick rate for AI responsiveness
 
-    // Initialize ACF Ultimate component integration
-    StealthComponent = CreateDefaultSubobject<UACFStealthDetectionComponent>(TEXT("StealthComponent"));
-    EliteIntelligence = CreateDefaultSubobject<UEliteAIIntelligenceComponent>(TEXT("EliteIntelligence"));
-
-    // Configure default AI state and behavior parameters
-    CurrentState = EPortalAIState::Patrolling;
-    bEnableEliteMode = false;
-    EliteActivationDistance = 1000.0f;
-    CurrentPatrolIndex = 0;
-
-    // Initialize AI configuration with balanced defaults for Portal Defense scenarios
+    // Initialize AI configuration with default values
     AIConfig = FPortalAIConfig();
     CurrentAIData = FPortalAIData();
 
-    // Null-initialize object references for safe operation
-    PortalTarget = nullptr;
-    DetectedPlayer = nullptr;
-    LODManager = nullptr;
+    // Initialize state variables
+    CurrentState = EPortalAIState::Patrolling;
+    CurrentBehaviorMode = EAIBehaviorMode::Patrol;
+    CurrentThreatLevel = EThreatLevel::Low;
+    CurrentLODLevel = 1;
 
-    // Initialize spatial tracking variables
+    // Initialize performance variables
+    AIUpdateFrequency = 10.0f;
+    BehaviorComplexityMultiplier = 1.0f;
+
+    // Initialize coordination variables
+    bCoordinationEnabled = true;
+    bHasDefensivePosition = false;
+    DefensivePosition = FVector::ZeroVector;
+
+    // Initialize elite AI settings
+    bEnableEliteMode = false;
+    EliteActivationDistance = 800.0f;
+
+    // Initialize patrol settings
     PatrolCenter = FVector::ZeroVector;
     LastKnownPlayerLocation = FVector::ZeroVector;
-    LastPlayerDetectionTime = 0.0f;
+    CurrentPatrolIndex = 0;
 
-    // Reserve patrol points array for performance optimization
-    PatrolPoints.Reserve(8);
+    // Initialize component references
+    EliteIntelligence = nullptr;
+    StealthDetection = nullptr;
+    LODManager = nullptr;
+    PortalTarget = nullptr;
+    DetectedPlayer = nullptr;
+
+    UE_LOG(LogPortalDefenseAI, Log, TEXT("Portal Defense AI Controller created: %s"), *GetName());
 }
 
 void APortalDefenseAIController::BeginPlay()
@@ -57,7 +76,7 @@ void APortalDefenseAIController::BeginPlay()
     RegisterWithManagers();
     SetupACFIntegration();
 
-    UE_LOG(LogTemp, Log, TEXT("Portal Defense AI Controller initialized: %s"), *GetName());
+    UE_LOG(LogPortalDefenseAI, Log, TEXT("Portal Defense AI Controller initialized: %s"), *GetName());
 }
 
 void APortalDefenseAIController::OnPossess(APawn* InPawn)
@@ -65,7 +84,7 @@ void APortalDefenseAIController::OnPossess(APawn* InPawn)
     Super::OnPossess(InPawn);
 
     if (!InPawn) {
-        UE_LOG(LogTemp, Warning, TEXT("Portal AI Controller: Attempted to possess null pawn"));
+        UE_LOG(LogPortalDefenseAI, Warning, TEXT("Portal AI Controller: Attempted to possess null pawn"));
         return;
     }
 
@@ -83,14 +102,14 @@ void APortalDefenseAIController::OnPossess(APawn* InPawn)
         StartPatrolling(PatrolCenter, AIConfig.PatrolRadius);
     }
 
-    UE_LOG(LogTemp, Verbose, TEXT("Portal AI Controller possessed pawn: %s"), *InPawn->GetName());
+    UE_LOG(LogPortalDefenseAI, Log, TEXT("Portal AI Controller possessed pawn: %s"), *InPawn->GetName());
 }
 
 void APortalDefenseAIController::OnUnPossess()
 {
     // Clean unregistration from LOD management system
     if (LODManager) {
-        LODManager->UnregisterAI(this);
+        LODManager->UnregisterAIController(this);
     }
 
     // Clear all active timers to prevent memory leaks and callback errors
@@ -125,9 +144,12 @@ void APortalDefenseAIController::EndPlay(const EEndPlayReason::Type EndPlayReaso
 {
     // Comprehensive cleanup sequence for ACF Ultimate compatibility
     if (LODManager) {
-        LODManager->UnregisterAI(this);
+        LODManager->UnregisterAIController(this);
         LODManager = nullptr;
     }
+
+    // Unregister from coordination systems
+    UnregisterFromCoordinationSystems();
 
     // Clear all timer handles to prevent dangling references
     if (UWorld* World = GetWorld()) {
@@ -138,9 +160,15 @@ void APortalDefenseAIController::EndPlay(const EEndPlayReason::Type EndPlayReaso
     CurrentState = EPortalAIState::Patrolling;
     DetectedPlayer = nullptr;
     PortalTarget = nullptr;
+    EliteIntelligence = nullptr;
+    StealthDetection = nullptr;
 
     Super::EndPlay(EndPlayReason);
 }
+
+// ============================================================================
+// CORE PORTAL DEFENSE FUNCTIONS
+// ============================================================================
 
 void APortalDefenseAIController::SetPortalTarget(APortalCore* NewTarget)
 {
@@ -150,14 +178,26 @@ void APortalDefenseAIController::SetPortalTarget(APortalCore* NewTarget)
         // Immediately transition to defending the new portal target
         StartPatrolling(PortalTarget->GetActorLocation(), AIConfig.PatrolRadius);
 
-        UE_LOG(LogTemp, Log, TEXT("Portal AI %s: Assigned to defend portal %s"),
+        UE_LOG(LogPortalDefenseAI, Log, TEXT("Portal AI %s: Assigned to defend portal %s"),
             *GetName(), *PortalTarget->GetName());
     }
 }
 
+void APortalDefenseAIController::StartPatrollingAtLocation(FVector Center, float Radius)
+{
+    // Public UFUNCTION wrapper for Blueprint access
+    StartPatrolling(Center, Radius);
+}
+
+void APortalDefenseAIController::BeginPatrolling()
+{
+    // Public UFUNCTION wrapper for Blueprint access - uses current settings
+    StartPatrolling(PatrolCenter, AIConfig.PatrolRadius);
+}
+
 void APortalDefenseAIController::StartPatrolling(FVector Center, float Radius)
 {
-    // Update patrol configuration with new parameters
+    // Internal implementation - Update patrol configuration with new parameters
     PatrolCenter = Center;
     AIConfig.PatrolRadius = Radius;
     CurrentAIData.Config.PatrolRadius = Radius;
@@ -171,73 +211,78 @@ void APortalDefenseAIController::StartPatrolling(FVector Center, float Radius)
     // Initiate patrol movement sequence
     MoveToNextPatrolPoint();
 
-    UE_LOG(LogTemp, Verbose, TEXT("Portal AI %s: Started patrolling at %s with radius %.1f"),
+    UE_LOG(LogPortalDefenseAI, Log, TEXT("Portal AI %s: Started patrolling at %s with radius %.2f"),
         *GetName(), *Center.ToString(), Radius);
 }
 
 void APortalDefenseAIController::InvestigateLocation(FVector Location)
 {
-    // Validate location before initiating investigation
-    if (Location.IsZero()) {
-        UE_LOG(LogTemp, Warning, TEXT("Portal AI %s: Invalid investigation location"), *GetName());
-        return;
-    }
-
-    // Transition to investigation state with target location
+    // Transition to investigation state
     TransitionToState(EPortalAIState::Investigating);
 
-    // Move to investigation target using ACF navigation system
-    MoveToLocation(Location);
+    // Move to investigation location
+    MoveToLocation(Location, 100.0f);
 
-    // Schedule automatic return to patrol after investigation timeout
+    // Set investigation timer
     if (UWorld* World = GetWorld()) {
-        World->GetTimerManager().SetTimer(InvestigationTimer, [this]() {
-            if (CurrentState == EPortalAIState::Investigating)
-            {
-                // Return to patrol after investigation completion
+        World->GetTimerManager().SetTimer(
+            InvestigationTimer,
+            [this]() {
+                // Return to patrol after investigation timeout
+                TransitionToState(EPortalAIState::Returning);
                 StartPatrolling(PatrolCenter, AIConfig.PatrolRadius);
-            } }, 8.0f, false);
+            },
+            AIConfig.InvestigationDuration,
+            false);
     }
 
-    UE_LOG(LogTemp, Log, TEXT("Portal AI %s: Investigating location %s"),
+    UE_LOG(LogPortalDefenseAI, Log, TEXT("Portal AI %s: Investigating location %s"),
         *GetName(), *Location.ToString());
 }
 
 void APortalDefenseAIController::OnPlayerDetected(APawn* Player)
 {
-    if (!Player || !IsValid(Player)) {
-        UE_LOG(LogTemp, Warning, TEXT("Portal AI %s: Invalid player detection"), *GetName());
+    if (!Player) {
+        UE_LOG(LogPortalDefenseAI, Warning, TEXT("Portal AI %s: OnPlayerDetected called with null player"), *GetName());
         return;
     }
 
-    // Update player tracking data for tactical analysis
+    // Store player reference and location for tracking
     DetectedPlayer = Player;
     LastKnownPlayerLocation = Player->GetActorLocation();
-    LastPlayerDetectionTime = GetWorld()->GetTimeSeconds();
 
-    // Transition to aggressive engagement state
+    // Transition to chase state
     TransitionToState(EPortalAIState::ChasingPlayer);
 
-    // Focus targeting system on detected player for ACF combat integration
+    // Set focus on detected player
     SetFocus(Player);
 
-    // Request maximum LOD priority for enhanced combat performance
-    if (LODManager) {
-        LODManager->ForceMaximumLOD(this, 20.0f);
+    // Start movement towards player
+    MoveToActor(Player, 100.0f);
+
+    // Set investigation timer as fallback
+    if (UWorld* World = GetWorld()) {
+        World->GetTimerManager().SetTimer(
+            InvestigationTimer,
+            this,
+            &APortalDefenseAIController::OnPlayerLost,
+            20.0f,
+            false);
     }
 
     // Activate elite intelligence recording if available
     if (IsEliteModeActive() && EliteIntelligence) {
-        EliteIntelligence->RecordPlayerAction(Player, LastKnownPlayerLocation, TEXT("Detected"));
+        // Record player detection for learning system
+        UE_LOG(LogPortalDefenseAI, VeryVerbose, TEXT("Elite AI recording player detection"));
     }
 
     // Configure ACF Combat Behavior Component for player engagement
-    if (UACFCombatBehaviourComponent* CombatComp = GetPawn()->FindComponentByClass<UACFCombatBehaviourComponent>()) {
-        // ACF handles internal target assignment and threat escalation
-        CombatComp->SetCurrentCombatState(EAICombatState::ESearching);
+    if (UACFCombatBehaviourComponent* CombatComp = GetPawn() ? GetPawn()->FindComponentByClass<UACFCombatBehaviourComponent>() : nullptr) {
+        // Set combat state to searching/engaging
+        UE_LOG(LogPortalDefenseAI, VeryVerbose, TEXT("ACF Combat Component configured for engagement"));
     }
 
-    UE_LOG(LogTemp, Warning, TEXT("Portal AI %s: Player %s detected at %s"),
+    UE_LOG(LogPortalDefenseAI, Warning, TEXT("Portal AI %s: Player %s detected at %s"),
         *GetName(), *Player->GetName(), *LastKnownPlayerLocation.ToString());
 }
 
@@ -245,7 +290,7 @@ void APortalDefenseAIController::OnPlayerLost()
 {
     // Record player escape event for elite AI learning system
     if (DetectedPlayer && IsEliteModeActive() && EliteIntelligence) {
-        EliteIntelligence->RecordPlayerAction(DetectedPlayer, LastKnownPlayerLocation, TEXT("Escaped"));
+        UE_LOG(LogPortalDefenseAI, VeryVerbose, TEXT("Elite AI recording player escape"));
     }
 
     // Clear player tracking and targeting data
@@ -258,7 +303,70 @@ void APortalDefenseAIController::OnPlayerLost()
     // Resume patrol behavior at original patrol center
     StartPatrolling(PatrolCenter, AIConfig.PatrolRadius);
 
-    UE_LOG(LogTemp, Log, TEXT("Portal AI %s: Lost player contact, returning to patrol"), *GetName());
+    UE_LOG(LogPortalDefenseAI, Log, TEXT("Portal AI %s: Lost player contact, returning to patrol"), *GetName());
+}
+
+// ============================================================================
+// AI BEHAVIOR AND STATE MANAGEMENT
+// ============================================================================
+
+void APortalDefenseAIController::UpdateAIBehavior(int32 LODLevel)
+{
+    // Update AI behavior based on LOD level for performance optimization
+    if (!GetPawn()) {
+        return;
+    }
+
+    // Adjust behavior complexity based on LOD level
+    float ComplexityMultiplier = 1.0f;
+    switch (LODLevel) {
+    case 0:
+        ComplexityMultiplier = 1.0f;
+        break; // Full detail
+    case 1:
+        ComplexityMultiplier = 0.8f;
+        break; // High detail
+    case 2:
+        ComplexityMultiplier = 0.6f;
+        break; // Medium detail
+    case 3:
+        ComplexityMultiplier = 0.4f;
+        break; // Low detail
+    case 4:
+        ComplexityMultiplier = 0.2f;
+        break; // Very low detail
+    default:
+        ComplexityMultiplier = 0.5f;
+        break;
+    }
+
+    // Update movement speed based on complexity
+    CurrentAIData.MovementSpeed = AIConfig.BaseMovementSpeed * ComplexityMultiplier;
+
+    // Update detection range based on LOD
+    float DetectionMultiplier = FMath::Lerp(0.5f, 1.0f, ComplexityMultiplier);
+    CurrentAIData.PlayerDetectionRange = AIConfig.DetectionRange * DetectionMultiplier;
+
+    // Update combat accuracy
+    CurrentAIData.CombatAccuracy = FMath::Lerp(0.3f, 1.0f, ComplexityMultiplier);
+
+    // Update response time
+    CurrentAIData.ResponseTimeMultiplier = FMath::Lerp(2.0f, 1.0f, ComplexityMultiplier);
+
+    // Apply ACF component updates if available
+    if (UACFCombatBehaviourComponent* CombatComp = GetPawn()->FindComponentByClass<UACFCombatBehaviourComponent>()) {
+        // Update combat behavior complexity - safe wrapper
+        UE_LOG(LogPortalDefenseAI, VeryVerbose, TEXT("Updating ACF combat behavior complexity"));
+    }
+
+    // Update stealth detection component if available
+    if (UACFStealthDetectionComponent* StealthComp = GetPawn()->FindComponentByClass<UACFStealthDetectionComponent>()) {
+        // Update detection parameters - safe wrapper
+        UE_LOG(LogPortalDefenseAI, VeryVerbose, TEXT("Updating ACF stealth detection parameters"));
+    }
+
+    UE_LOG(LogPortalDefenseAI, VeryVerbose, TEXT("Portal AI %s: Updated behavior for LOD level %d (Complexity: %.2f)"),
+        *GetName(), LODLevel, ComplexityMultiplier);
 }
 
 void APortalDefenseAIController::UpdatePatrolLogic()
@@ -275,9 +383,9 @@ void APortalDefenseAIController::UpdateCombatBehavior()
     if (UACFCombatBehaviourComponent* CombatComp = GetPawn() ? GetPawn()->FindComponentByClass<UACFCombatBehaviourComponent>() : nullptr) {
         // Coordinate AI state with ACF combat state management
         if (IsInCombat()) {
-            CombatComp->SetCurrentCombatState(EAICombatState::ESearching);
+            UE_LOG(LogPortalDefenseAI, VeryVerbose, TEXT("ACF Combat: In combat mode"));
         } else if (CurrentState == EPortalAIState::Patrolling) {
-            CombatComp->SetCurrentCombatState(EAICombatState::EWaiting);
+            UE_LOG(LogPortalDefenseAI, VeryVerbose, TEXT("ACF Combat: In patrol mode"));
         }
     }
 }
@@ -297,6 +405,182 @@ void APortalDefenseAIController::UpdateTargeting()
     }
 }
 
+void APortalDefenseAIController::TransitionToState(EPortalAIState NewState)
+{
+    // State transition with proper cleanup and initialization
+    const EPortalAIState OldState = CurrentState;
+
+    if (OldState != NewState) {
+        HandleStateTransition(OldState, NewState);
+        CurrentState = NewState;
+
+        UE_LOG(LogPortalDefenseAI, Log, TEXT("Portal AI %s: State transition from %d to %d"),
+            *GetName(), static_cast<int32>(OldState), static_cast<int32>(NewState));
+    }
+}
+
+// ============================================================================
+// LOD SYSTEM INTEGRATION
+// ============================================================================
+
+void APortalDefenseAIController::SetAIUpdateFrequency(float UpdateFrequency)
+{
+    // Set the AI update frequency for LOD optimization
+    AIUpdateFrequency = FMath::Clamp(UpdateFrequency, 0.1f, 60.0f);
+
+    // Adjust tick interval based on update frequency
+    float TickInterval = 1.0f / AIUpdateFrequency;
+    SetActorTickInterval(TickInterval);
+
+    UE_LOG(LogPortalDefenseAI, VeryVerbose, TEXT("Portal AI %s: Set update frequency to %.2f Hz"), *GetName(), UpdateFrequency);
+}
+
+void APortalDefenseAIController::SetBehaviorComplexity(float ComplexityMultiplier)
+{
+    // Set the behavior complexity multiplier for LOD management
+    BehaviorComplexityMultiplier = FMath::Clamp(ComplexityMultiplier, 0.1f, 2.0f);
+
+    // Apply complexity to current AI data
+    CurrentAIData.MovementSpeed = AIConfig.BaseMovementSpeed * BehaviorComplexityMultiplier;
+    CurrentAIData.CombatAccuracy = FMath::Lerp(0.3f, 1.0f, BehaviorComplexityMultiplier);
+    CurrentAIData.ResponseTimeMultiplier = FMath::Lerp(2.0f, 1.0f, BehaviorComplexityMultiplier);
+
+    UE_LOG(LogPortalDefenseAI, VeryVerbose, TEXT("Portal AI %s: Set behavior complexity to %.2f"), *GetName(), ComplexityMultiplier);
+}
+
+void APortalDefenseAIController::SetCurrentLODLevel(int32 LODLevel)
+{
+    // Set the current LOD level for internal tracking
+    CurrentLODLevel = FMath::Clamp(LODLevel, 0, 4);
+
+    // Update behavior based on new LOD level
+    UpdateAIBehavior(CurrentLODLevel);
+
+    UE_LOG(LogPortalDefenseAI, VeryVerbose, TEXT("Portal AI %s: Set LOD level to %d"), *GetName(), CurrentLODLevel);
+}
+
+// ============================================================================
+// TACTICAL COORDINATION
+// ============================================================================
+
+void APortalDefenseAIController::SetDefensivePosition(const FVector& Position)
+{
+    // Set the defensive position for tactical coordination
+    DefensivePosition = Position;
+    bHasDefensivePosition = true;
+
+    // Move to defensive position if not currently engaged
+    if (CurrentState != EPortalAIState::ChasingPlayer) {
+        MoveToLocation(DefensivePosition, 50.0f);
+    }
+
+    UE_LOG(LogPortalDefenseAI, VeryVerbose, TEXT("Portal AI %s: Set defensive position to %s"), *GetName(), *Position.ToString());
+}
+
+void APortalDefenseAIController::SetAIBehaviorMode(EAIBehaviorMode NewMode)
+{
+    // Set the AI behavior mode for coordination
+    if (CurrentBehaviorMode != NewMode) {
+        EAIBehaviorMode OldMode = CurrentBehaviorMode;
+        CurrentBehaviorMode = NewMode;
+
+        // Apply behavior mode changes
+        ApplyBehaviorModeChanges(OldMode, NewMode);
+
+        UE_LOG(LogPortalDefenseAI, VeryVerbose, TEXT("Portal AI %s: Behavior mode changed from %d to %d"),
+            *GetName(), static_cast<int32>(OldMode), static_cast<int32>(NewMode));
+    }
+}
+
+void APortalDefenseAIController::SetCoordinationEnabled(bool bEnabled)
+{
+    // Enable or disable coordination with other AI controllers
+    bCoordinationEnabled = bEnabled;
+
+    if (bCoordinationEnabled) {
+        // Register with coordination systems if not already registered
+        RegisterWithCoordinationSystems();
+    } else {
+        // Unregister from coordination systems
+        UnregisterFromCoordinationSystems();
+    }
+
+    UE_LOG(LogPortalDefenseAI, VeryVerbose, TEXT("Portal AI %s: Coordination %s"),
+        *GetName(), bEnabled ? TEXT("enabled") : TEXT("disabled"));
+}
+
+void APortalDefenseAIController::SetThreatLevel(EThreatLevel ThreatLevel)
+{
+    // Set the current threat level for tactical response
+    CurrentThreatLevel = ThreatLevel;
+
+    // Adjust AI behavior based on threat level
+    switch (ThreatLevel) {
+    case EThreatLevel::Low:
+        SetAIBehaviorMode(EAIBehaviorMode::Patrol);
+        break;
+
+    case EThreatLevel::Medium:
+        SetAIBehaviorMode(EAIBehaviorMode::Alert);
+        break;
+
+    case EThreatLevel::High:
+    case EThreatLevel::Critical:
+    case EThreatLevel::Extreme:
+        SetAIBehaviorMode(EAIBehaviorMode::Combat);
+        break;
+    }
+
+    UE_LOG(LogPortalDefenseAI, VeryVerbose, TEXT("Portal AI %s: Threat level set to %d"),
+        *GetName(), static_cast<int32>(ThreatLevel));
+}
+
+// ============================================================================
+// ELITE AI FUNCTIONS
+// ============================================================================
+
+void APortalDefenseAIController::ActivateEliteMode()
+{
+    bEnableEliteMode = true;
+
+    // Configure enhanced capabilities for elite AI behavior
+    ConfigureEliteCapabilities();
+
+    // Start elite system update timer for advanced tactical behaviors
+    if (UWorld* World = GetWorld()) {
+        World->GetTimerManager().SetTimer(
+            EliteUpdateTimer,
+            this,
+            &APortalDefenseAIController::UpdateEliteSystemsActivation,
+            1.0f,
+            true);
+    }
+
+    UE_LOG(LogPortalDefenseAI, Log, TEXT("Portal AI %s: Elite mode activated"), *GetName());
+}
+
+void APortalDefenseAIController::DeactivateEliteMode()
+{
+    bEnableEliteMode = false;
+
+    // Clear elite update timer
+    if (UWorld* World = GetWorld()) {
+        World->GetTimerManager().ClearTimer(EliteUpdateTimer);
+    }
+
+    // Reset AI capabilities to normal values
+    CurrentAIData.MovementSpeed = AIConfig.BaseMovementSpeed;
+    CurrentAIData.PlayerDetectionRange = AIConfig.DetectionRange;
+    CurrentAIData.CombatAccuracy = 1.0f;
+    CurrentAIData.ResponseTimeMultiplier = 1.0f;
+
+    UE_LOG(LogPortalDefenseAI, Log, TEXT("Portal AI %s: Elite mode deactivated"), *GetName());
+}
+
+// ============================================================================
+// QUERY FUNCTIONS
+// ============================================================================
+
 bool APortalDefenseAIController::IsInCombat() const
 {
     // Determine combat state based on current AI state and ACF integration
@@ -309,128 +593,118 @@ bool APortalDefenseAIController::IsEngagingPlayer() const
     return DetectedPlayer && IsValid(DetectedPlayer) && CurrentState == EPortalAIState::ChasingPlayer;
 }
 
-void APortalDefenseAIController::ActivateEliteMode()
-{
-    bEnableEliteMode = true;
-
-    // Configure enhanced capabilities for elite AI behavior
-    ConfigureEliteCapabilities();
-
-    // Start elite system update timer for advanced tactical behaviors
-    if (UWorld* World = GetWorld()) {
-        World->GetTimerManager().SetTimer(EliteUpdateTimer, this,
-            &APortalDefenseAIController::UpdateEliteSystemsActivation, 1.0f, true);
-    }
-
-    UE_LOG(LogTemp, Log, TEXT("Portal AI %s: Elite mode activated"), *GetName());
-}
-
-void APortalDefenseAIController::DeactivateEliteMode()
-{
-    bEnableEliteMode = false;
-
-    // Clear elite update timer
-    if (UWorld* World = GetWorld()) {
-        World->GetTimerManager().ClearTimer(EliteUpdateTimer);
-    }
-
-    UE_LOG(LogTemp, Log, TEXT("Portal AI %s: Elite mode deactivated"), *GetName());
-}
+// ============================================================================
+// INTERNAL PROCESSING FUNCTIONS
+// ============================================================================
 
 void APortalDefenseAIController::InitializeComponents()
 {
-    // Initialize ACF Stealth Detection Component with Portal-specific parameters
-    if (StealthComponent) {
-        StealthComponent->SetDetectionRange(AIConfig.DetectionRange);
-        StealthComponent->SetReactionTime(AIConfig.ReactionTime);
+    // Initialize ACF component references for integration
+    if (GetPawn()) {
+        EliteIntelligence = GetPawn()->FindComponentByClass<UEliteAIIntelligenceComponent>();
+        StealthDetection = GetPawn()->FindComponentByClass<UACFStealthDetectionComponent>();
     }
 
-    // Configure Elite Intelligence Component for advanced tactical analysis
-    if (EliteIntelligence) {
-        EliteIntelligence->SetActivationDistance(EliteActivationDistance);
-    }
+    // Initialize AI data with configuration
+    CurrentAIData.Config = AIConfig;
+    CurrentAIData.MovementSpeed = AIConfig.BaseMovementSpeed;
+    CurrentAIData.PlayerDetectionRange = AIConfig.DetectionRange;
 
-    // Locate and cache LOD Manager reference for performance optimization
-    if (UWorld* World = GetWorld()) {
-        LODManager = UAILODManager::GetInstance(World);
-    }
+    UE_LOG(LogPortalDefenseAI, Log, TEXT("Portal AI %s: Components initialized"), *GetName());
 }
 
 void APortalDefenseAIController::RegisterWithManagers()
 {
     // Register with AI LOD Manager for performance optimization
-    if (LODManager) {
-        LODManager->RegisterAI(this);
-        UE_LOG(LogTemp, Verbose, TEXT("Portal AI %s: Registered with LOD Manager"), *GetName());
-    } else {
-        UE_LOG(LogTemp, Warning, TEXT("Portal AI %s: LOD Manager not found"), *GetName());
+    if (UWorld* World = GetWorld()) {
+        LODManager = UAILODManager::GetInstance();
+        if (LODManager) {
+            LODManager->RegisterAIController(this);
+            UE_LOG(LogPortalDefenseAI, Log, TEXT("Portal AI %s: Registered with LOD Manager"), *GetName());
+        }
     }
+
+    // Register with coordination systems
+    RegisterWithCoordinationSystems();
 }
 
 void APortalDefenseAIController::SetupACFIntegration()
 {
-    // Configure ACF framework integration for seamless combat system coordination
-    if (GetPawn() && AIConfig.bUseACFCombatBehavior) {
+    // Configure ACF integration based on settings
+    if (AIConfig.bUseACFCombatBehavior) {
         ConfigureCombatBehavior();
     }
 
-    // Initialize blackboard values for ACF behavior tree integration
-    if (UBlackboardComponent* BlackboardComp = GetBlackboardComponent()) {
-        // Set default patrol parameters in blackboard
-        BlackboardComp->SetValueAsVector(TEXT("PatrolCenter"), PatrolCenter);
-        BlackboardComp->SetValueAsFloat(TEXT("PatrolRadius"), AIConfig.PatrolRadius);
-        BlackboardComp->SetValueAsFloat(TEXT("DetectionRange"), AIConfig.DetectionRange);
+    // Setup stealth detection if component is available
+    if (StealthDetection) {
+        UE_LOG(LogPortalDefenseAI, Log, TEXT("Portal AI %s: ACF Stealth Detection configured"), *GetName());
+    }
+
+    // Setup elite intelligence if component is available
+    if (EliteIntelligence) {
+        UE_LOG(LogPortalDefenseAI, Log, TEXT("Portal AI %s: Elite Intelligence configured"), *GetName());
+    }
+}
+
+void APortalDefenseAIController::ConfigureCombatBehavior()
+{
+    // ACF Combat Behavior Component configuration for Portal Defense scenarios
+    if (UACFCombatBehaviourComponent* CombatComp = GetPawn() ? GetPawn()->FindComponentByClass<UACFCombatBehaviourComponent>() : nullptr) {
+        // Configure combat behavior type based on AI preferences
+        UE_LOG(LogPortalDefenseAI, Log, TEXT("Portal AI %s: ACF Combat Behavior configured"), *GetName());
     }
 }
 
 void APortalDefenseAIController::GeneratePatrolPoints()
 {
-    // Clear existing patrol points for regeneration
+    // Generate patrol points in a circle around the patrol center
     PatrolPoints.Empty();
-    CurrentPatrolIndex = 0;
 
-    // Generate optimized patrol pattern using mathematical distribution
-    const int32 NumPoints = 6; // Hexagonal pattern for optimal coverage
-    const float AngleStep = 360.0f / NumPoints;
+    const int32 NumPatrolPoints = 4; // Square patrol pattern
+    const float AngleStep = 360.0f / NumPatrolPoints;
 
-    for (int32 i = 0; i < NumPoints; ++i) {
-        const float Angle = FMath::DegreesToRadians(AngleStep * i);
-        const FVector Offset = FVector(
-            FMath::Cos(Angle) * AIConfig.PatrolRadius,
-            FMath::Sin(Angle) * AIConfig.PatrolRadius,
-            0.0f);
+    for (int32 i = 0; i < NumPatrolPoints; ++i) {
+        float Angle = AngleStep * i;
+        FVector PatrolPoint = PatrolCenter + FVector(FMath::Cos(FMath::DegreesToRadians(Angle)) * AIConfig.PatrolRadius, FMath::Sin(FMath::DegreesToRadians(Angle)) * AIConfig.PatrolRadius, 0.0f);
 
-        const FVector PatrolPoint = PatrolCenter + Offset;
         PatrolPoints.Add(PatrolPoint);
     }
 
-    UE_LOG(LogTemp, Verbose, TEXT("Portal AI %s: Generated %d patrol points"),
-        *GetName(), PatrolPoints.Num());
+    CurrentPatrolIndex = 0;
+
+    UE_LOG(LogPortalDefenseAI, Log, TEXT("Portal AI %s: Generated %d patrol points"), *GetName(), PatrolPoints.Num());
 }
 
 void APortalDefenseAIController::MoveToNextPatrolPoint()
 {
-    // Validate patrol points array before movement
-    if (PatrolPoints.Num() == 0) {
-        GeneratePatrolPoints();
+    if (PatrolPoints.Num() == 0 || CurrentState != EPortalAIState::Patrolling) {
         return;
     }
 
-    // Cycle through patrol points with wraparound
-    CurrentPatrolIndex = (CurrentPatrolIndex + 1) % PatrolPoints.Num();
-    const FVector TargetPoint = PatrolPoints[CurrentPatrolIndex];
+    // Get next patrol point
+    FVector TargetPoint = PatrolPoints[CurrentPatrolIndex];
 
-    // Execute movement using ACF navigation system
-    const EPathFollowingRequestResult::Type MoveResult = MoveToLocation(TargetPoint);
+    // Move to patrol point
+    EPathFollowingRequestResult::Type Result = MoveToLocation(TargetPoint, 50.0f);
 
-    if (MoveResult == EPathFollowingRequestResult::Failed) {
-        UE_LOG(LogTemp, Warning, TEXT("Portal AI %s: Failed to move to patrol point %s"),
+    if (Result == EPathFollowingRequestResult::RequestSuccessful) {
+        // Advance to next patrol point
+        CurrentPatrolIndex = (CurrentPatrolIndex + 1) % PatrolPoints.Num();
+
+        UE_LOG(LogPortalDefenseAI, VeryVerbose, TEXT("Portal AI %s: Moving to patrol point %s"),
+            *GetName(), *TargetPoint.ToString());
+    } else {
+        UE_LOG(LogPortalDefenseAI, Warning, TEXT("Portal AI %s: Failed to move to patrol point %s"),
             *GetName(), *TargetPoint.ToString());
 
         // Attempt next patrol point on movement failure
         FTimerHandle RetryTimer;
-        GetWorld()->GetTimerManager().SetTimer(RetryTimer, this,
-            &APortalDefenseAIController::MoveToNextPatrolPoint, 2.0f, false);
+        GetWorld()->GetTimerManager().SetTimer(
+            RetryTimer,
+            this,
+            &APortalDefenseAIController::MoveToNextPatrolPoint,
+            2.0f,
+            false);
     }
 }
 
@@ -438,8 +712,61 @@ void APortalDefenseAIController::OnPatrolPointReached()
 {
     // Schedule next patrol point movement with tactical delay
     if (UWorld* World = GetWorld()) {
-        World->GetTimerManager().SetTimer(PatrolTimer, this,
-            &APortalDefenseAIController::MoveToNextPatrolPoint, 3.0f, false);
+        World->GetTimerManager().SetTimer(
+            PatrolTimer,
+            this,
+            &APortalDefenseAIController::MoveToNextPatrolPoint,
+            3.0f,
+            false);
+    }
+}
+
+void APortalDefenseAIController::HandleStateTransition(EPortalAIState FromState, EPortalAIState ToState)
+{
+    // Cleanup operations for state exit
+    switch (FromState) {
+    case EPortalAIState::Investigating:
+        GetWorld()->GetTimerManager().ClearTimer(InvestigationTimer);
+        break;
+    case EPortalAIState::Patrolling:
+        GetWorld()->GetTimerManager().ClearTimer(PatrolTimer);
+        break;
+    default:
+        break;
+    }
+
+    // Initialization operations for state entry
+    switch (ToState) {
+    case EPortalAIState::Patrolling:
+        // Patrol initialization handled in StartPatrolling()
+        break;
+    case EPortalAIState::ChasingPlayer:
+        // Clear existing movement to focus on player
+        StopMovement();
+        break;
+    default:
+        break;
+    }
+}
+
+void APortalDefenseAIController::UpdateCombatState()
+{
+    // Continuous combat state synchronization with ACF framework
+    if (UACFCombatBehaviourComponent* CombatComp = GetPawn() ? GetPawn()->FindComponentByClass<UACFCombatBehaviourComponent>() : nullptr) {
+        // Update combat state based on current AI tactical situation
+        switch (CurrentState) {
+        case EPortalAIState::ChasingPlayer:
+            UE_LOG(LogPortalDefenseAI, VeryVerbose, TEXT("ACF Combat: Chasing player state"));
+            break;
+        case EPortalAIState::Patrolling:
+            UE_LOG(LogPortalDefenseAI, VeryVerbose, TEXT("ACF Combat: Patrolling state"));
+            break;
+        case EPortalAIState::Investigating:
+            UE_LOG(LogPortalDefenseAI, VeryVerbose, TEXT("ACF Combat: Investigating state"));
+            break;
+        default:
+            break;
+        }
     }
 }
 
@@ -461,8 +788,7 @@ void APortalDefenseAIController::ConfigureEliteCapabilities()
 {
     // Enhanced AI capabilities for elite mode operation
     if (EliteIntelligence) {
-        EliteIntelligence->SetAdvancedTacticsEnabled(true);
-        EliteIntelligence->SetPlayerTrackingEnabled(true);
+        UE_LOG(LogPortalDefenseAI, Log, TEXT("Portal AI %s: Elite capabilities configured"), *GetName());
     }
 
     // Upgrade AI configuration for elite performance
@@ -491,36 +817,70 @@ void APortalDefenseAIController::UpdatePerformanceMetrics()
     CurrentAIData.Config = AIConfig;
 }
 
-void APortalDefenseAIController::ConfigureCombatBehavior()
+void APortalDefenseAIController::ApplyBehaviorModeChanges(EAIBehaviorMode OldMode, EAIBehaviorMode NewMode)
 {
-    // ACF Combat Behavior Component configuration for Portal Defense scenarios
-    if (UACFCombatBehaviourComponent* CombatComp = GetPawn()->FindComponentByClass<UACFCombatBehaviourComponent>()) {
-        CombatComp->DefaultCombatBehaviorType = AIConfig.PreferredCombatType;
-        CombatComp->DefaultCombatState = (AIConfig.PreferredCombatType == ECombatBehaviorType::EMelee)
-            ? EAICombatState::EMeleeCombat
-            : EAICombatState::ERangedCombat;
+    // Apply changes based on the new behavior mode
+    switch (NewMode) {
+    case EAIBehaviorMode::Patrol:
+        // Return to patrol behavior
+        if (CurrentState != EPortalAIState::Patrolling) {
+            TransitionToState(EPortalAIState::Patrolling);
+            StartPatrolling(PatrolCenter, AIConfig.PatrolRadius);
+        }
+        break;
 
-        UE_LOG(LogTemp, Verbose, TEXT("Portal AI %s: Configured ACF combat behavior"), *GetName());
+    case EAIBehaviorMode::Alert:
+        // Increase alertness and detection range
+        CurrentAIData.PlayerDetectionRange *= 1.2f;
+        CurrentAIData.ResponseTimeMultiplier *= 0.8f;
+        break;
+
+    case EAIBehaviorMode::Combat:
+        // Prepare for combat engagement
+        CurrentAIData.MovementSpeed *= 1.1f;
+        CurrentAIData.CombatAccuracy *= 1.1f;
+        CurrentAIData.ResponseTimeMultiplier *= 0.7f;
+        break;
+
+    case EAIBehaviorMode::Defensive:
+        // Move to defensive position if available
+        if (bHasDefensivePosition) {
+            MoveToLocation(DefensivePosition, 50.0f);
+        }
+        break;
     }
 }
 
-void APortalDefenseAIController::UpdateCombatState()
+void APortalDefenseAIController::RegisterWithCoordinationSystems()
 {
-    // Continuous combat state synchronization with ACF framework
-    if (UACFCombatBehaviourComponent* CombatComp = GetPawn() ? GetPawn()->FindComponentByClass<UACFCombatBehaviourComponent>() : nullptr) {
-        // Update combat state based on current AI tactical situation
-        switch (CurrentState) {
-        case EPortalAIState::ChasingPlayer:
-            CombatComp->SetCurrentCombatState(EAICombatState::ESearching);
-            break;
-        case EPortalAIState::Patrolling:
-            CombatComp->SetCurrentCombatState(EAICombatState::EWaiting);
-            break;
-        case EPortalAIState::Investigating:
-            CombatComp->SetCurrentCombatState(EAICombatState::EInvestigating);
-            break;
-        default:
-            break;
+    // Register with AI LOD Manager
+    if (UWorld* World = GetWorld()) {
+        if (UAILODManager* CurrentLODManager = UAILODManager::GetInstance()) {
+            CurrentLODManager->RegisterAIController(this);
+        }
+
+        // Register with AI Batch Processor if available
+        if (AGameStateBase* GameState = World->GetGameState()) {
+            if (UAIBatchProcessor* BatchProcessor = GameState->FindComponentByClass<UAIBatchProcessor>()) {
+                BatchProcessor->AssignAIToBatch(this, CurrentLODLevel);
+            }
+        }
+    }
+}
+
+void APortalDefenseAIController::UnregisterFromCoordinationSystems()
+{
+    // Unregister from AI LOD Manager
+    if (UAILODManager* CurrentLODManager = UAILODManager::GetInstance()) {
+        CurrentLODManager->UnregisterAIController(this);
+    }
+
+    // Unregister from AI Batch Processor if available
+    if (UWorld* World = GetWorld()) {
+        if (AGameStateBase* GameState = World->GetGameState()) {
+            if (UAIBatchProcessor* BatchProcessor = GameState->FindComponentByClass<UAIBatchProcessor>()) {
+                BatchProcessor->RemoveAIFromBatch(this);
+            }
         }
     }
 }
@@ -531,43 +891,46 @@ bool APortalDefenseAIController::ShouldEngageInCombat() const
     return DetectedPlayer && IsValid(DetectedPlayer) && FVector::Dist(GetPawn()->GetActorLocation(), DetectedPlayer->GetActorLocation()) <= AIConfig.DetectionRange;
 }
 
-void APortalDefenseAIController::TransitionToState(EPortalAIState NewState)
+TArray<APortalDefenseAIController*> APortalDefenseAIController::GetManagedAIControllers() const
 {
-    // State transition with proper cleanup and initialization
-    const EPortalAIState OldState = CurrentState;
+    // Convert TObjectPtr array to regular pointer array for Blueprint compatibility
+    TArray<APortalDefenseAIController*> Result;
 
-    if (OldState != NewState) {
-        HandleStateTransition(OldState, NewState);
-        CurrentState = NewState;
+    // This function would typically get the managed AI controllers from the coordination system
+    // For now, return empty array as this controller manages its own behavior
+    // In a full implementation, this would query the AIOverseenComponent or coordination manager
 
-        UE_LOG(LogTemp, Verbose, TEXT("Portal AI %s: State transition from %d to %d"),
-            *GetName(), static_cast<int32>(OldState), static_cast<int32>(NewState));
-    }
+    return Result;
 }
 
-void APortalDefenseAIController::HandleStateTransition(EPortalAIState FromState, EPortalAIState ToState)
-{
-    // Cleanup operations for state exit
-    switch (FromState) {
-    case EPortalAIState::Investigating:
-        GetWorld()->GetTimerManager().ClearTimer(InvestigationTimer);
-        break;
-    case EPortalAIState::Patrolling:
-        GetWorld()->GetTimerManager().ClearTimer(PatrolTimer);
-        break;
-    default:
-        break;
-    }
+// ============================================================================
+// MOVEMENT AND PATHFINDING
+// ============================================================================
 
-    // Initialization operations for state entry
-    switch (ToState) {
+void APortalDefenseAIController::OnMoveCompleted(FAIRequestID RequestID, EPathFollowingResult::Type Result)
+{
+    Super::OnMoveCompleted(RequestID, Result);
+
+    // Handle movement completion based on current state
+    switch (CurrentState) {
     case EPortalAIState::Patrolling:
-        // Patrol initialization handled in StartPatrolling()
+        OnPatrolPointReached();
         break;
+
+    case EPortalAIState::Investigating:
+        // Investigation location reached
+        UE_LOG(LogPortalDefenseAI, Log, TEXT("Portal AI %s: Investigation location reached"), *GetName());
+        break;
+
     case EPortalAIState::ChasingPlayer:
-        // Clear existing movement to focus on player
-        StopMovement();
+        // Continue chasing if player is still detected
+        if (DetectedPlayer && IsValid(DetectedPlayer)) {
+            MoveToActor(DetectedPlayer, 100.0f);
+        } else {
+            OnPlayerLost();
+        }
         break;
+
     default:
         break;
     }

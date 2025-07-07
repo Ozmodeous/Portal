@@ -3,78 +3,85 @@
 #pragma once
 
 #include "ACFAIController.h"
-#include "AILODManager.h"
-#include "Async/AsyncWork.h"
+#include "AIController.h"
 #include "Components/ActorComponent.h"
+#include "Containers/Array.h"
 #include "CoreMinimal.h"
+#include "Engine/Engine.h"
 #include "Engine/World.h"
-#include "EngineUtils.h"
-#include "GameFramework/GameModeBase.h"
-#include "HAL/PlatformFilemanager.h"
-#include "PortalDefenseAIController.h"
+#include "Game/ACFTypes.h"
+#include "PortalAITypes.h"
+#include "TimerManager.h"
+#include "UObject/ObjectPtr.h"
 #include "AIBatchProcessor.generated.h"
 
+// Forward Declarations
+class APortalDefenseAIController;
+class UAILODManager;
+class UACFCombatBehaviourComponent;
+
+/**
+ * AI Batch Data Structure
+ * Contains batch processing information for grouped AI controllers
+ */
 USTRUCT(BlueprintType)
-struct FAIBatchData {
+struct PORTAL_API FAIBatchData {
     GENERATED_BODY()
 
-    UPROPERTY(BlueprintReadOnly, Category = "Batch Processing")
-    TArray<TObjectPtr<AACFAIController>> InactiveBatch;
+    /** Array of AI Controllers in this batch */
+    UPROPERTY(BlueprintReadWrite, Category = "Batch Data")
+    TArray<TObjectPtr<APortalDefenseAIController>> AIControllers;
 
-    UPROPERTY(BlueprintReadOnly, Category = "Batch Processing")
-    TArray<TObjectPtr<AACFAIController>> MinimalBatch;
+    /** Batch processing priority level */
+    UPROPERTY(BlueprintReadWrite, Category = "Batch Data")
+    EAIProcessingPriority Priority;
 
-    UPROPERTY(BlueprintReadOnly, Category = "Batch Processing")
-    TArray<TObjectPtr<AACFAIController>> StandardBatch;
+    /** Batch identifier string */
+    UPROPERTY(BlueprintReadWrite, Category = "Batch Data")
+    FString BatchName;
 
-    UPROPERTY(BlueprintReadOnly, Category = "Batch Processing")
-    TArray<TObjectPtr<AACFAIController>> HighBatch;
+    /** Last processing timestamp */
+    UPROPERTY(BlueprintReadWrite, Category = "Batch Data")
+    float LastProcessingTime;
 
-    UPROPERTY(BlueprintReadOnly, Category = "Batch Processing")
-    TArray<TObjectPtr<AACFAIController>> MaximumBatch;
+    /** Average processing time for this batch */
+    UPROPERTY(BlueprintReadWrite, Category = "Batch Data")
+    float AverageProcessingTime;
+
+    /** Maximum AI controllers allowed in this batch */
+    UPROPERTY(BlueprintReadWrite, Category = "Batch Data")
+    int32 MaxBatchSize;
+
+    /** Current batch processing load factor */
+    UPROPERTY(BlueprintReadWrite, Category = "Batch Data")
+    float LoadFactor;
 
     FAIBatchData()
     {
-        InactiveBatch.Empty();
-        MinimalBatch.Empty();
-        StandardBatch.Empty();
-        HighBatch.Empty();
-        MaximumBatch.Empty();
+        Priority = EAIProcessingPriority::Medium;
+        BatchName = TEXT("DefaultBatch");
+        LastProcessingTime = 0.0f;
+        AverageProcessingTime = 0.0f;
+        MaxBatchSize = 20;
+        LoadFactor = 1.0f;
     }
 };
 
-USTRUCT(BlueprintType)
-struct FAIBatchSettings {
-    GENERATED_BODY()
-
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Batch Settings")
-    int32 MaxAIPerBatch = 25;
-
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Batch Settings")
-    float InactiveBatchUpdateRate = 2.0f;
-
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Batch Settings")
-    float MinimalBatchUpdateRate = 1.0f;
-
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Batch Settings")
-    float StandardBatchUpdateRate = 0.5f;
-
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Batch Settings")
-    float HighBatchUpdateRate = 0.1f;
-
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Batch Settings")
-    float MaximumBatchUpdateRate = 0.0f; // Every tick
-
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Batch Settings")
-    bool bUseAsyncProcessing = true;
-
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Batch Settings")
-    bool bEnablePerformanceScaling = true;
-};
-
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnBatchProcessed, EAILODLevel, LODLevel, int32, ProcessedCount);
-
-UCLASS(ClassGroup = (Custom), meta = (BlueprintSpawnableComponent))
+/**
+ * AI Batch Processor Component
+ *
+ * Advanced batch processing system for AI controllers to optimize performance
+ * in scenarios with large numbers of AI entities. Integrates with ACF Ultimate
+ * for seamless combat behavior coordination and LOD management.
+ *
+ * Features:
+ * - Dynamic batch assignment based on LOD levels
+ * - Priority-based processing queues
+ * - Performance monitoring and load balancing
+ * - ACF combat behavior integration
+ * - Configurable batch sizes and processing intervals
+ */
+UCLASS(ClassGroup = (Custom), meta = (BlueprintSpawnableComponent), BlueprintType, Blueprintable)
 class PORTAL_API UAIBatchProcessor : public UActorComponent {
     GENERATED_BODY()
 
@@ -84,98 +91,141 @@ public:
 protected:
     virtual void BeginPlay() override;
     virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
-    virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
 
 public:
-    // Singleton access
-    UFUNCTION(BlueprintPure, Category = "AI Batch Processing")
-    static UAIBatchProcessor* GetInstance(UWorld* World);
+    virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
 
-    // Batch Management
+    // ============================================================================
+    // BATCH MANAGEMENT FUNCTIONS
+    // ============================================================================
+
+    /** Initialize the batch processing system */
     UFUNCTION(BlueprintCallable, Category = "AI Batch Processing")
-    void UpdateBatches();
+    void InitializeBatchProcessor();
 
+    /** Process a specific batch of AI controllers */
     UFUNCTION(BlueprintCallable, Category = "AI Batch Processing")
-    void ProcessBatch(EAILODLevel LODLevel);
+    void ProcessBatch(const TArray<APortalDefenseAIController*>& AIControllers, const FString& BatchName);
 
+    /** Assign an AI controller to appropriate batch based on LOD level */
     UFUNCTION(BlueprintCallable, Category = "AI Batch Processing")
-    void AddAIToBatch(AACFAIController* AIController, EAILODLevel LODLevel);
+    void AssignAIToBatch(APortalDefenseAIController* AIController, int32 LODLevel);
 
+    /** Remove AI controller from batch processing */
     UFUNCTION(BlueprintCallable, Category = "AI Batch Processing")
-    void RemoveAIFromBatch(AACFAIController* AIController, EAILODLevel LODLevel);
+    void RemoveAIFromBatch(APortalDefenseAIController* AIController);
 
+    /** Get the current batch for an AI controller */
     UFUNCTION(BlueprintCallable, Category = "AI Batch Processing")
-    void ProcessBatchAsync(EAILODLevel LODLevel);
+    FString GetAIBatchName(APortalDefenseAIController* AIController);
 
-    // Performance Management
+    /** Force immediate processing of all batches */
     UFUNCTION(BlueprintCallable, Category = "AI Batch Processing")
-    void AdjustBatchSizes();
+    void ForceProcessAllBatches();
 
-    UFUNCTION(BlueprintCallable, Category = "AI Batch Processing")
-    void OptimizeBatchScheduling();
+    // ============================================================================
+    // BATCH CONFIGURATION
+    // ============================================================================
 
-    // Analytics
-    UFUNCTION(BlueprintPure, Category = "AI Batch Processing")
-    int32 GetTotalBatchedAI() const;
+    /** Maximum number of AI controllers per batch */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Batch Settings", meta = (ClampMin = "1", ClampMax = "100"))
+    int32 MaxBatchSize = 25;
 
-    UFUNCTION(BlueprintPure, Category = "AI Batch Processing")
-    int32 GetBatchSize(EAILODLevel LODLevel) const;
+    /** Base processing interval for batches in seconds */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Batch Settings", meta = (ClampMin = "0.01", ClampMax = "1.0"))
+    float BaseBatchProcessingInterval = 0.1f;
 
-    UFUNCTION(BlueprintPure, Category = "AI Batch Processing")
-    float GetAverageProcessingTime() const { return AverageProcessingTime; }
+    /** Enable performance monitoring for batch processing */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Batch Settings")
+    bool bEnablePerformanceMonitoring = true;
 
-    UFUNCTION(BlueprintPure, Category = "AI Batch Processing")
-    FAIBatchData GetCurrentBatchData() const { return CurrentBatches; }
+    /** Maximum processing time per frame in milliseconds */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Batch Settings", meta = (ClampMin = "1.0", ClampMax = "33.0"))
+    float MaxProcessingTimePerFrame = 5.0f;
 
-    // Settings
-    UFUNCTION(BlueprintCallable, Category = "AI Batch Processing")
-    void SetBatchSettings(const FAIBatchSettings& NewSettings) { BatchSettings = NewSettings; }
-
-    UFUNCTION(BlueprintPure, Category = "AI Batch Processing")
-    FAIBatchSettings GetBatchSettings() const { return BatchSettings; }
-
-    // Events
-    UPROPERTY(BlueprintAssignable, Category = "AI Batch Processing")
-    FOnBatchProcessed OnBatchProcessed;
+    /** LOD level multipliers for batch processing intervals */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Batch Settings")
+    TMap<int32, float> LODProcessingMultipliers;
 
 protected:
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "AI Batch Processing")
-    FAIBatchSettings BatchSettings;
+    // ============================================================================
+    // INTERNAL BATCH DATA
+    // ============================================================================
 
-    UPROPERTY(BlueprintReadOnly, Category = "AI Batch Processing")
-    FAIBatchData CurrentBatches;
+    /** Collection of AI batch data organized by priority */
+    UPROPERTY()
+    TMap<EAIProcessingPriority, FAIBatchData> BatchData;
 
-    UPROPERTY(BlueprintReadOnly, Category = "AI Batch Processing")
+    /** Mapping of AI controllers to their assigned batches */
+    UPROPERTY()
+    TMap<TObjectPtr<APortalDefenseAIController>, FString> AIToBatchMapping;
+
+    /** Timer handles for batch processing */
+    UPROPERTY()
+    TMap<FString, FTimerHandle> BatchProcessingTimers;
+
+    /** Performance tracking data */
+    UPROPERTY()
     float AverageProcessingTime = 0.0f;
 
-    UPROPERTY(BlueprintReadOnly, Category = "AI Batch Processing")
+    /** Total number of processed AI controllers this frame */
+    UPROPERTY()
+    int32 ProcessedAICount = 0;
+
+    /** Reference to the AI LOD Manager */
+    UPROPERTY()
     TObjectPtr<UAILODManager> LODManager;
 
-private:
-    static TObjectPtr<UAIBatchProcessor> InstancePtr;
+    // ============================================================================
+    // INTERNAL PROCESSING FUNCTIONS
+    // ============================================================================
 
-    FTimerHandle InactiveBatchTimer;
-    FTimerHandle MinimalBatchTimer;
-    FTimerHandle StandardBatchTimer;
-    FTimerHandle HighBatchTimer;
+    /** Process individual AI controller within batch context */
+    void ProcessAIController(APortalDefenseAIController* AIController);
 
-    int32 CurrentInactiveBatchIndex = 0;
-    int32 CurrentMinimalBatchIndex = 0;
-    int32 CurrentStandardBatchIndex = 0;
-    int32 CurrentHighBatchIndex = 0;
+    /** Update batch processing timers based on current load */
+    void UpdateBatchTimers();
 
-    TArray<float> ProcessingTimes;
-    float LastFrameTime = 16.67f;
+    /** Calculate optimal batch assignment for AI controller */
+    EAIProcessingPriority CalculateBatchPriority(APortalDefenseAIController* AIController, int32 LODLevel);
 
-    void InitializeBatchTimers();
-    void ClearBatchTimers();
-    void ProcessInactiveBatch();
-    void ProcessMinimalBatch();
-    void ProcessStandardBatch();
-    void ProcessHighBatch();
-    void ProcessMaximumBatch();
-    void UpdateProcessingMetrics(float ProcessingTime);
-    void CleanupInvalidAI();
-    TArray<TObjectPtr<AACFAIController>>& GetBatchByLOD(EAILODLevel LODLevel);
-    const TArray<TObjectPtr<AACFAIController>>& GetBatchByLOD(EAILODLevel LODLevel) const;
+    /** Get LOD level from batch name for processing optimization */
+    int32 GetLODLevelFromBatchName(const FString& BatchName);
+
+    /** Monitor and log batch processing performance */
+    void MonitorBatchPerformance(const FString& BatchName, float ProcessingTime);
+
+    /** Redistribute AI controllers across batches for load balancing */
+    void RebalanceBatches();
+
+    /** Create new batch data structure */
+    FAIBatchData CreateNewBatch(const FString& BatchName, EAIProcessingPriority Priority);
+
+    /** Clean up empty or invalid batches */
+    void CleanupEmptyBatches();
+
+public:
+    // ============================================================================
+    // BLUEPRINT ACCESSIBLE GETTERS
+    // ============================================================================
+
+    /** Get current number of active batches */
+    UFUNCTION(BlueprintCallable, Category = "AI Batch Processing")
+    int32 GetActiveBatchCount() const;
+
+    /** Get total number of AI controllers being processed */
+    UFUNCTION(BlueprintCallable, Category = "AI Batch Processing")
+    int32 GetTotalProcessedAICount() const;
+
+    /** Get average processing time across all batches */
+    UFUNCTION(BlueprintCallable, Category = "AI Batch Processing")
+    float GetAverageProcessingTime() const;
+
+    /** Get batch data for debugging purposes */
+    UFUNCTION(BlueprintCallable, Category = "AI Batch Processing")
+    TArray<FString> GetBatchNames() const;
+
+    /** Check if batch processor is currently active */
+    UFUNCTION(BlueprintCallable, Category = "AI Batch Processing")
+    bool IsBatchProcessorActive() const;
 };

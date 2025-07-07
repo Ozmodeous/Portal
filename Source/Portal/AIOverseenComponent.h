@@ -2,33 +2,28 @@
 
 #pragma once
 
-#include "ACFAIController.h"
-#include "ACFCoreTypes.h"
 #include "Components/ActorComponent.h"
+#include "Containers/Array.h"
 #include "CoreMinimal.h"
+#include "Engine/World.h"
+#include "Game/ACFTypes.h"
+#include "PortalAITypes.h"
+#include "TimerManager.h"
+#include "UObject/ObjectPtr.h"
 #include "AIOverseenComponent.generated.h"
 
-// Forward Declarations for ACF Ultimate Integration
-class UAIOverlordManager;
+// Forward Declarations
+class APortalDefenseAIController;
 class APortalCore;
-class UACFThreatManagerComponent;
-class UATSTargetingComponent;
 
 /**
- * AI Overseen Component - ACF Ultimate Integration Bridge
+ * AI Overseen Component
  *
- * This component serves as the primary integration layer between Portal game systems
- * and ACF Ultimate's AI framework. It provides seamless coordination between patrol AI,
- * the overlord management system, and ACF's sophisticated combat and behavior systems.
- *
- * Key Features:
- * - Automatic registration with AI Overlord Manager
- * - ACF team management integration
- * - Portal defense coordination
- * - Advanced patrol behavior setup
- * - Player detection and alert systems
+ * Advanced tactical coordination system for AI controllers that provides
+ * sophisticated group behavior management, threat assessment, and formation
+ * control. Integrates seamlessly with ACF Ultimate's AI systems.
  */
-UCLASS(ClassGroup = (Portal), meta = (BlueprintSpawnableComponent, DisplayName = "AI Overseen Component"))
+UCLASS(ClassGroup = (Custom), meta = (BlueprintSpawnableComponent), BlueprintType, Blueprintable)
 class PORTAL_API UAIOverseenComponent : public UActorComponent {
     GENERATED_BODY()
 
@@ -40,150 +35,130 @@ protected:
     virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 public:
-    // Core ACF AI Controller Integration
-    UFUNCTION(BlueprintCallable, Category = "AI Overseen")
-    void InitializeWithController();
+    virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
 
-    UFUNCTION(BlueprintCallable, Category = "AI Overseen")
-    void ReportDeath();
+    // ============================================================================
+    // TACTICAL COORDINATION FUNCTIONS
+    // ============================================================================
 
-    // ACF Framework Integration
-    UFUNCTION(BlueprintCallable, Category = "AI Overseen")
-    void SetCombatTeam(ETeam NewTeam);
+    /** Initialize the tactical coordination system */
+    UFUNCTION(BlueprintCallable, Category = "AI Coordination")
+    void InitializeTacticalSystem();
 
-    UFUNCTION(BlueprintPure, Category = "AI Overseen")
-    bool IsACFCharacter() const;
+    /** Register an AI controller for tactical coordination */
+    UFUNCTION(BlueprintCallable, Category = "AI Coordination")
+    void RegisterManagedAI(APortalDefenseAIController* AIController);
 
-    // AI Controller Access and Management
-    UFUNCTION(BlueprintPure, Category = "AI Overseen")
-    AACFAIController* GetACFController() const { return ACFAIController; }
+    /** Unregister an AI controller from coordination */
+    UFUNCTION(BlueprintCallable, Category = "AI Coordination")
+    void UnregisterManagedAI(APortalDefenseAIController* AIController);
 
-    // Overlord System Integration
-    UFUNCTION(BlueprintCallable, Category = "AI Overseen")
-    void SetOverlordTarget(AActor* Target);
+    /** Update tactical coordination for all managed AI */
+    UFUNCTION(BlueprintCallable, Category = "AI Coordination")
+    void UpdateTacticalCoordination();
 
-    UFUNCTION(BlueprintCallable, Category = "AI Overseen")
-    void ApplyOverlordUpgrade(float MovementMultiplier, float DetectionMultiplier, bool bEnableAdvancedTactics);
+    /** Set the current threat level for tactical response */
+    UFUNCTION(BlueprintCallable, Category = "AI Coordination")
+    void SetThreatLevel(EThreatLevel NewThreatLevel);
 
-    // Patrol System Integration
-    UFUNCTION(BlueprintCallable, Category = "AI Overseen")
-    void SetPatrolCenter(FVector Center);
+    /** Find the Portal Core for defense coordination */
+    UFUNCTION(BlueprintCallable, Category = "AI Coordination")
+    APortalCore* FindPortalCore();
 
-    UFUNCTION(BlueprintCallable, Category = "AI Overseen")
-    void SetPatrolRadius(float Radius);
+    // ============================================================================
+    // COORDINATION CONFIGURATION
+    // ============================================================================
 
-    UFUNCTION(BlueprintCallable, Category = "AI Overseen")
-    void StartPatrolling();
+    /** Tactical update rate in updates per second */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Coordination Settings", meta = (ClampMin = "0.1", ClampMax = "10.0"))
+    float TacticalUpdateRate = 2.0f;
 
-    UFUNCTION(BlueprintCallable, Category = "AI Overseen")
-    void StopPatrolling();
+    /** Maximum number of AI controllers this component can manage */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Coordination Settings", meta = (ClampMin = "1", ClampMax = "50"))
+    int32 MaxManagedAI = 10;
 
-    // Portal Defense Integration
-    UFUNCTION(BlueprintCallable, Category = "AI Overseen")
-    void SetPortalDefenseMode(bool bDefendPortal);
+    /** Enable elite AI coordination for advanced tactics */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Coordination Settings")
+    bool bEnableEliteCoordination = true;
 
-    UFUNCTION(BlueprintCallable, Category = "AI Overseen")
-    void AlertToPlayerPresence(FVector PlayerLocation);
-
-    // Player Detection and Alert System
-    UFUNCTION(BlueprintCallable, Category = "AI Overseen")
-    void OnPlayerDetected(APawn* PlayerPawn);
-
-    UFUNCTION(BlueprintCallable, Category = "AI Overseen")
-    void OnPlayerLost();
-
-    // Team and Portal Integration
-    UFUNCTION(BlueprintCallable, Category = "AI Overseen")
-    void SetPortalTarget(APortalCore* Portal);
-
-    UFUNCTION(BlueprintPure, Category = "AI Overseen")
-    float GetDistanceToPortal() const;
-
-protected:
-    // Core ACF Integration Properties
-    UPROPERTY(BlueprintReadOnly, Category = "AI Controller")
-    TObjectPtr<AACFAIController> ACFAIController;
-
-    // Overlord Registration Settings
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Overlord Integration", meta = (DisplayName = "Auto Register With Overlord"))
-    bool bAutoRegisterWithOverlord = true;
-
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ACF Integration", meta = (DisplayName = "Integrate With ACF Teams"))
-    bool bIntegrateWithACFTeams = true;
-
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ACF Integration")
-    ETeam DefaultGuardTeam = ETeam::ETeam2;
-
-    // Patrol Behavior Configuration
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Patrol Settings", meta = (DisplayName = "Auto Setup Patrol Behavior"))
-    bool bAutoSetPatrolBehavior = true;
-
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Patrol Settings")
-    float DefaultPatrolRadius = 400.0f;
-
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Patrol Settings", meta = (DisplayName = "Use Spawn Location As Patrol Center"))
-    bool bUseSpawnLocationAsPatrolCenter = true;
-
-    UPROPERTY(BlueprintReadOnly, Category = "Patrol Settings")
-    FVector PatrolCenter = FVector::ZeroVector;
-
-    // Portal Defense Configuration
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Portal Defense", meta = (DisplayName = "Defend Portal"))
+    /** Enable portal defense behavior */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Coordination Settings")
     bool bDefendPortal = true;
 
-    UPROPERTY(BlueprintReadOnly, Category = "Portal Defense")
-    TObjectPtr<APortalCore> AssignedPortal;
+    /** Threat escalation threshold before changing tactics */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Coordination Settings", meta = (ClampMin = "1", ClampMax = "10"))
+    int32 ThreatEscalationThreshold = 3;
 
-    // Player Detection and Alert System
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Detection", meta = (DisplayName = "Player Detection Range"))
-    float PlayerDetectionRange = 1200.0f;
+    /** Coordination radius for AI influence */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Coordination Settings", meta = (ClampMin = "100.0", ClampMax = "5000.0"))
+    float CoordinationRadius = 1500.0f;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Detection", meta = (DisplayName = "Maximum Chase Distance"))
-    float MaxChaseDistance = 2000.0f;
+    /** Maximum defensive radius around portal */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Coordination Settings", meta = (ClampMin = "100.0", ClampMax = "3000.0"))
+    float MaxDefensiveRadius = 800.0f;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Alert System", meta = (DisplayName = "Alert Other Guards"))
-    bool bAlertOtherGuards = true;
+protected:
+    // ============================================================================
+    // INTERNAL COORDINATION DATA
+    // ============================================================================
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Alert System", meta = (DisplayName = "Alert Radius"))
-    float AlertRadius = 1500.0f;
+    /** Array of managed AI controllers */
+    UPROPERTY()
+    TArray<TObjectPtr<APortalDefenseAIController>> ManagedAIControllers;
 
-    // State Tracking
-    UPROPERTY(BlueprintReadOnly, Category = "State")
-    bool bIsPlayerDetected = false;
+    /** Reference to the Portal Core for defense coordination */
+    UPROPERTY()
+    TObjectPtr<APortalCore> PortalCore;
 
-    UPROPERTY(BlueprintReadOnly, Category = "State")
-    bool bIsInCombat = false;
+    /** Current threat level assessment */
+    UPROPERTY()
+    EThreatLevel CurrentThreatLevel = EThreatLevel::Low;
 
-    UPROPERTY(BlueprintReadOnly, Category = "State")
-    TObjectPtr<APawn> DetectedPlayer;
+    /** Timer handle for tactical updates */
+    UPROPERTY()
+    FTimerHandle TacticalUpdateTimer;
 
-    // Performance and Optimization
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Performance", meta = (DisplayName = "Enable Advanced AI Features"))
-    bool bEnableAdvancedFeatures = true;
+    /** Defensive position around portal */
+    UPROPERTY()
+    FVector DefensivePosition = FVector::ZeroVector;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Performance", meta = (DisplayName = "Update Frequency"))
-    float UpdateFrequency = 0.5f;
+    // ============================================================================
+    // INTERNAL PROCESSING FUNCTIONS
+    // ============================================================================
 
-private:
-    // Internal Setup and Configuration Methods
-    void SetupACFIntegration();
-    void SetupPatrolBehavior();
-    void SetPortalAsDefenseTarget();
+    /** Check if AI controller is eligible for coordination */
+    bool IsAIControllerEligible(APortalDefenseAIController* AIController) const;
 
-    // Event Handlers
-    UFUNCTION()
-    void OnOwnerDestroyed(AActor* DestroyedActor);
+    /** Configure AI for tactical coordination */
+    void ConfigureAIForTacticalCoordination(APortalDefenseAIController* AIController);
 
-    // ACF Component Access Helpers
-    UACFThreatManagerComponent* GetThreatManager() const;
-    UATSTargetingComponent* GetTargetingComponent() const;
+    /** Update threat assessment based on current situation */
+    void UpdateThreatAssessment();
 
-    // Internal State Management
-    void UpdateDetectionState();
-    void HandlePlayerProximity();
-    void InitializeACFComponents();
+    /** Calculate optimal defensive positions */
+    void CalculateDefensivePositions();
 
-    // Timer Handles for Performance Management
-    FTimerHandle DetectionUpdateTimer;
-    FTimerHandle PatrolUpdateTimer;
+    /** Apply coordination commands to managed AI */
+    void ApplyCoordinationCommands();
+
+public:
+    // ============================================================================
+    // BLUEPRINT ACCESSIBLE GETTERS
+    // ============================================================================
+
+    /** Get current number of managed AI controllers */
+    UFUNCTION(BlueprintCallable, Category = "AI Coordination")
+    int32 GetManagedAICount() const;
+
+    /** Get current threat level */
+    UFUNCTION(BlueprintCallable, Category = "AI Coordination")
+    EThreatLevel GetCurrentThreatLevel() const;
+
+    /** Check if coordination system is active */
+    UFUNCTION(BlueprintCallable, Category = "AI Coordination")
+    bool IsCoordinationActive() const;
+
+    /** Get managed AI controllers array */
+    UFUNCTION(BlueprintCallable, Category = "AI Coordination")
+    TArray<APortalDefenseAIController*> GetManagedAIControllers() const;
 };

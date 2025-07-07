@@ -3,9 +3,19 @@
 #pragma once
 
 #include "ACFAIController.h"
+#include "AIController.h"
+#include "BehaviorTree/BlackboardComponent.h"
+#include "Containers/Array.h"
 #include "CoreMinimal.h"
 #include "Engine/TimerHandle.h"
+#include "Engine/World.h"
 #include "Game/ACFTypes.h"
+#include "GameFramework/Character.h"
+#include "GameFramework/Pawn.h"
+#include "Navigation/PathFollowingComponent.h"
+#include "Perception/AIPerceptionComponent.h"
+#include "PortalAITypes.h"
+#include "UObject/ObjectPtr.h"
 #include "PortalDefenseAIController.generated.h"
 
 // Forward Declarations for ACF Ultimate Integration
@@ -14,123 +24,8 @@ class UAILODManager;
 class UEliteAIIntelligenceComponent;
 class UACFStealthDetectionComponent;
 class UACFCombatBehaviourComponent;
-
-/**
- * Portal AI State Enumeration
- * Defines the behavioral states for Portal Defense AI Controllers
- * Integrates seamlessly with ACF Ultimate's AI state management system
- */
-UENUM(BlueprintType)
-enum class EPortalAIState : uint8 {
-    Patrolling UMETA(DisplayName = "Patrolling"),
-    Investigating UMETA(DisplayName = "Investigating"),
-    ChasingPlayer UMETA(DisplayName = "Chasing Player"),
-    Guarding UMETA(DisplayName = "Guarding Portal"),
-    Returning UMETA(DisplayName = "Returning to Patrol")
-};
-
-/**
- * Portal AI Configuration Structure
- * Comprehensive configuration data for Portal Defense AI behavior
- * Optimized for ACF Ultimate combat system integration
- */
-USTRUCT(BlueprintType)
-struct PORTAL_API FPortalAIConfig {
-    GENERATED_BODY()
-
-    /** Base patrol radius around the assigned portal */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Patrol", meta = (ClampMin = "100.0", ClampMax = "2000.0"))
-    float PatrolRadius = 500.0f;
-
-    /** Maximum distance for player detection and engagement */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Detection", meta = (ClampMin = "200.0", ClampMax = "3000.0"))
-    float DetectionRange = 1200.0f;
-
-    /** AI reaction time before initiating response behaviors */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Behavior", meta = (ClampMin = "0.1", ClampMax = "3.0"))
-    float ReactionTime = 0.5f;
-
-    /** Enable ACF Ultimate combat behavior integration */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ACF Integration")
-    bool bUseACFCombatBehavior = true;
-
-    /** Preferred combat engagement type for ACF combat system */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ACF Integration")
-    ECombatBehaviorType PreferredCombatType = ECombatBehaviorType::EMelee;
-
-    /** Movement speed multiplier during different AI states */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Movement", meta = (ClampMin = "0.5", ClampMax = "3.0"))
-    float MovementSpeed = 1.0f;
-
-    /** Enable advanced pathfinding for complex navigation scenarios */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Navigation")
-    bool bUseAdvancedPathfinding = false;
-
-    /** Player detection range for stealth detection component */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Detection")
-    float PlayerDetectionRange = 1000.0f;
-
-    /** Maximum chase distance before returning to patrol */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Behavior")
-    float MaxChaseDistance = 1500.0f;
-
-    FPortalAIConfig()
-    {
-        PatrolRadius = 500.0f;
-        DetectionRange = 1200.0f;
-        ReactionTime = 0.5f;
-        bUseACFCombatBehavior = true;
-        PreferredCombatType = ECombatBehaviorType::EMelee;
-        MovementSpeed = 1.0f;
-        bUseAdvancedPathfinding = false;
-        PlayerDetectionRange = 1000.0f;
-        MaxChaseDistance = 1500.0f;
-    }
-};
-
-/**
- * Portal Defense AI Data Structure
- * Runtime data tracking for AI performance and state management
- * Integrated with AI LOD Manager for performance optimization
- */
-USTRUCT(BlueprintType)
-struct PORTAL_API FPortalAIData {
-    GENERATED_BODY()
-
-    /** Current AI configuration settings */
-    UPROPERTY(BlueprintReadWrite, Category = "AI Data")
-    FPortalAIConfig Config;
-
-    /** Current movement speed (can be modified by upgrades) */
-    UPROPERTY(BlueprintReadWrite, Category = "AI Data")
-    float MovementSpeed = 1.0f;
-
-    /** Enhanced player detection range (modified by intelligence upgrades) */
-    UPROPERTY(BlueprintReadWrite, Category = "AI Data")
-    float PlayerDetectionRange = 1000.0f;
-
-    /** Enable advanced tactical behaviors */
-    UPROPERTY(BlueprintReadWrite, Category = "AI Data")
-    bool bUseAdvancedPathfinding = false;
-
-    /** Combat accuracy modifier for ACF targeting systems */
-    UPROPERTY(BlueprintReadWrite, Category = "AI Data")
-    float CombatAccuracy = 1.0f;
-
-    /** Response time optimization factor */
-    UPROPERTY(BlueprintReadWrite, Category = "AI Data")
-    float ResponseTimeMultiplier = 1.0f;
-
-    FPortalAIData()
-    {
-        Config = FPortalAIConfig();
-        MovementSpeed = 1.0f;
-        PlayerDetectionRange = 1000.0f;
-        bUseAdvancedPathfinding = false;
-        CombatAccuracy = 1.0f;
-        ResponseTimeMultiplier = 1.0f;
-    }
-};
+class UAIBatchProcessor;
+class UAIOverseenComponent;
 
 /**
  * Portal Defense AI Controller
@@ -145,6 +40,8 @@ struct PORTAL_API FPortalAIData {
  * - Elite AI mode with advanced tactical behaviors
  * - Performance-optimized LOD integration for large-scale battles
  * - ACF Ultimate combat behavior integration for sophisticated combat AI
+ * - Tactical coordination with other AI controllers
+ * - Threat assessment and response systems
  */
 UCLASS(BlueprintType, meta = (DisplayName = "Portal Defense AI Controller"))
 class PORTAL_API APortalDefenseAIController : public AACFAIController {
@@ -154,7 +51,9 @@ public:
     APortalDefenseAIController();
 
 protected:
-    // Core Unreal Engine Lifecycle
+    // ============================================================================
+    // CORE UNREAL ENGINE LIFECYCLE
+    // ============================================================================
     virtual void BeginPlay() override;
     virtual void OnPossess(APawn* InPawn) override;
     virtual void OnUnPossess() override;
@@ -162,173 +61,330 @@ protected:
     virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 public:
-    // Core Portal Defense Functions
+    // ============================================================================
+    // CORE PORTAL DEFENSE FUNCTIONS
+    // ============================================================================
+
+    /** Set the portal target this AI should defend */
     UFUNCTION(BlueprintCallable, Category = "Portal Defense")
     void SetPortalTarget(APortalCore* NewTarget);
 
-    /**
-     * Start patrolling around a specific location with defined radius
-     * @param Center The center point for patrol behavior
-     * @param Radius The patrol radius around the center point
-     */
-    UFUNCTION(BlueprintCallable, Category = "Portal Defense")
-    void StartPatrolling(FVector Center, float Radius = 500.0f);
+    /** Start patrolling around a specific location with defined radius */
+    UFUNCTION(BlueprintCallable, Category = "Portal Defense", meta = (DisplayName = "Start Patrolling With Parameters"))
+    void StartPatrollingAtLocation(FVector Center, float Radius = 500.0f);
 
-    /** Start patrolling using current patrol center and configured radius */
-    UFUNCTION(BlueprintCallable, Category = "Portal Defense", DisplayName = "Start Patrolling at Current Center")
-    void BeginPatrolling() { StartPatrolling(PatrolCenter, AIConfig.PatrolRadius); }
+    /** Start patrolling with current configuration */
+    UFUNCTION(BlueprintCallable, Category = "Portal Defense", meta = (DisplayName = "Start Patrolling"))
+    void BeginPatrolling();
 
+    /** Investigate a specific location */
     UFUNCTION(BlueprintCallable, Category = "Portal Defense")
     void InvestigateLocation(FVector Location);
 
+    /** Handle player detection event */
     UFUNCTION(BlueprintCallable, Category = "Portal Defense")
     void OnPlayerDetected(APawn* Player);
 
+    /** Handle player lost event */
     UFUNCTION(BlueprintCallable, Category = "Portal Defense")
     void OnPlayerLost();
 
-    // LOD System Integration for Performance Optimization
+    // ============================================================================
+    // AI BEHAVIOR AND STATE MANAGEMENT
+    // ============================================================================
+
+    /** Update AI behavior based on LOD level */
+    UFUNCTION(BlueprintCallable, Category = "AI LOD")
+    void UpdateAIBehavior(int32 LODLevel);
+
+    /** Update patrol logic */
     UFUNCTION(BlueprintCallable, Category = "AI LOD")
     void UpdatePatrolLogic();
 
+    /** Update combat behavior */
     UFUNCTION(BlueprintCallable, Category = "AI LOD")
     void UpdateCombatBehavior();
 
+    /** Update targeting system */
     UFUNCTION(BlueprintCallable, Category = "AI LOD")
     void UpdateTargeting();
 
-    UFUNCTION(BlueprintPure, Category = "AI LOD")
-    bool IsInCombat() const;
+    /** Transition to a new AI state */
+    UFUNCTION(BlueprintCallable, Category = "AI State")
+    void TransitionToState(EPortalAIState NewState);
 
-    UFUNCTION(BlueprintPure, Category = "AI LOD")
-    bool IsEngagingPlayer() const;
+    // ============================================================================
+    // LOD SYSTEM INTEGRATION
+    // ============================================================================
 
-    // Configuration and Legacy Support Functions
-    UFUNCTION(BlueprintCallable, Category = "Portal Defense")
-    void SetPatrolCenter(FVector Center) { StartPatrolling(Center, AIConfig.PatrolRadius); }
+    /** Set AI update frequency for LOD optimization */
+    UFUNCTION(BlueprintCallable, Category = "AI LOD")
+    void SetAIUpdateFrequency(float UpdateFrequency);
 
-    UFUNCTION(BlueprintCallable, Category = "Portal Defense")
-    void SetPatrolRadius(float Radius) { AIConfig.PatrolRadius = Radius; }
+    /** Set behavior complexity multiplier */
+    UFUNCTION(BlueprintCallable, Category = "AI LOD")
+    void SetBehaviorComplexity(float ComplexityMultiplier);
 
-    UFUNCTION(BlueprintCallable, Category = "Portal Defense")
-    void StopPatrolling() { GetWorldTimerManager().ClearTimer(PatrolTimer); }
+    /** Set current LOD level */
+    UFUNCTION(BlueprintCallable, Category = "AI LOD")
+    void SetCurrentLODLevel(int32 LODLevel);
 
-    // Elite AI Integration with Intelligence Component
+    // ============================================================================
+    // TACTICAL COORDINATION
+    // ============================================================================
+
+    /** Set defensive position for tactical coordination */
+    UFUNCTION(BlueprintCallable, Category = "AI Coordination")
+    void SetDefensivePosition(const FVector& Position);
+
+    /** Set AI behavior mode */
+    UFUNCTION(BlueprintCallable, Category = "AI Coordination")
+    void SetAIBehaviorMode(EAIBehaviorMode NewMode);
+
+    /** Enable or disable coordination */
+    UFUNCTION(BlueprintCallable, Category = "AI Coordination")
+    void SetCoordinationEnabled(bool bEnabled);
+
+    /** Set threat level for tactical response */
+    UFUNCTION(BlueprintCallable, Category = "AI Coordination")
+    void SetThreatLevel(EThreatLevel ThreatLevel);
+
+    // ============================================================================
+    // ELITE AI FUNCTIONS
+    // ============================================================================
+
+    /** Activate elite AI mode */
     UFUNCTION(BlueprintCallable, Category = "Elite AI")
     void ActivateEliteMode();
 
+    /** Deactivate elite AI mode */
     UFUNCTION(BlueprintCallable, Category = "Elite AI")
     void DeactivateEliteMode();
 
+    /** Check if elite mode is active */
     UFUNCTION(BlueprintPure, Category = "Elite AI")
     bool IsEliteModeActive() const { return bEnableEliteMode; }
 
+    /** Set elite activation distance */
     UFUNCTION(BlueprintCallable, Category = "Elite AI")
     void SetEliteActivationDistance(float Distance) { EliteActivationDistance = Distance; }
 
-    // Data Access and Configuration
+    // ============================================================================
+    // QUERY FUNCTIONS
+    // ============================================================================
+
+    /** Check if AI is currently in combat */
+    UFUNCTION(BlueprintPure, Category = "AI State")
+    bool IsInCombat() const;
+
+    /** Check if AI is engaging player */
+    UFUNCTION(BlueprintPure, Category = "AI State")
+    bool IsEngagingPlayer() const;
+
+    /** Get current AI state */
+    UFUNCTION(BlueprintPure, Category = "AI State")
+    EPortalAIState GetCurrentState() const { return CurrentState; }
+
+    /** Get current AI data */
     UFUNCTION(BlueprintPure, Category = "AI Data")
     FPortalAIData GetCurrentAIData() const { return CurrentAIData; }
 
+    /** Set AI data */
     UFUNCTION(BlueprintCallable, Category = "AI Data")
     void SetAIData(const FPortalAIData& NewData) { CurrentAIData = NewData; }
 
-    UFUNCTION(BlueprintPure, Category = "Portal Defense")
-    EPortalAIState GetCurrentState() const { return CurrentState; }
+    /** Get array of managed AI controllers (Blueprint-safe) */
+    UFUNCTION(BlueprintCallable, Category = "AI Coordination")
+    TArray<APortalDefenseAIController*> GetManagedAIControllers() const;
 
-    UFUNCTION(BlueprintPure, Category = "Portal Defense")
-    APortalCore* GetPortalTarget() const { return PortalTarget; }
+    // ============================================================================
+    // CONFIGURATION PROPERTIES
+    // ============================================================================
 
-    // Component Access for Advanced Integration
-    UFUNCTION(BlueprintPure, Category = "Components")
-    UACFStealthDetectionComponent* GetStealthDetectionComponent() const { return StealthComponent; }
-
-    UFUNCTION(BlueprintPure, Category = "Components")
-    UEliteAIIntelligenceComponent* GetEliteIntelligenceComponent() const { return EliteIntelligence; }
-
-protected:
-    // Core Portal Defense Properties
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Portal Defense", meta = (DisplayName = "AI Configuration"))
+    /** Portal AI configuration settings */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "AI Configuration")
     FPortalAIConfig AIConfig;
 
-    UPROPERTY(BlueprintReadOnly, Category = "Portal Defense")
-    TObjectPtr<APortalCore> PortalTarget;
+    /** Elite AI activation distance */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Elite AI", meta = (ClampMin = "100.0", ClampMax = "2000.0"))
+    float EliteActivationDistance = 800.0f;
 
-    UPROPERTY(BlueprintReadOnly, Category = "AI State")
-    EPortalAIState CurrentState = EPortalAIState::Patrolling;
-
-    // AI Performance and Intelligence Data
-    UPROPERTY(BlueprintReadWrite, Category = "AI Data")
-    FPortalAIData CurrentAIData;
-
-    // ACF Ultimate Component Integration
-    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "ACF Components", meta = (DisplayName = "Stealth Detection"))
-    TObjectPtr<UACFStealthDetectionComponent> StealthComponent;
-
-    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "ACF Components", meta = (DisplayName = "Elite Intelligence"))
-    TObjectPtr<UEliteAIIntelligenceComponent> EliteIntelligence;
-
-    // Elite AI System Properties
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Elite AI", meta = (DisplayName = "Enable Elite Mode"))
+    /** Enable elite AI mode */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Elite AI")
     bool bEnableEliteMode = false;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Elite AI", meta = (ClampMin = "500.0", ClampMax = "2000.0"))
-    float EliteActivationDistance = 1000.0f;
+protected:
+    // ============================================================================
+    // INTERNAL STATE VARIABLES
+    // ============================================================================
 
-    // Patrol System Properties
-    UPROPERTY(BlueprintReadOnly, Category = "Patrol")
-    FVector PatrolCenter = FVector::ZeroVector;
+    /** Current AI state */
+    UPROPERTY()
+    EPortalAIState CurrentState = EPortalAIState::Patrolling;
 
-    UPROPERTY(BlueprintReadOnly, Category = "Patrol")
-    TArray<FVector> PatrolPoints;
+    /** Current AI data structure */
+    UPROPERTY()
+    FPortalAIData CurrentAIData;
 
-    UPROPERTY(BlueprintReadOnly, Category = "Patrol")
-    int32 CurrentPatrolIndex = 0;
+    /** Portal target this AI is defending */
+    UPROPERTY()
+    TObjectPtr<APortalCore> PortalTarget;
 
-    // Player Tracking and Detection
-    UPROPERTY(BlueprintReadOnly, Category = "Detection")
+    /** Currently detected player */
+    UPROPERTY()
     TObjectPtr<APawn> DetectedPlayer;
 
-    UPROPERTY(BlueprintReadOnly, Category = "Detection")
+    /** Patrol center position */
+    UPROPERTY()
+    FVector PatrolCenter = FVector::ZeroVector;
+
+    /** Last known player location */
+    UPROPERTY()
     FVector LastKnownPlayerLocation = FVector::ZeroVector;
 
-    UPROPERTY(BlueprintReadOnly, Category = "Detection")
-    float LastPlayerDetectionTime = 0.0f;
+    /** Array of patrol points */
+    UPROPERTY()
+    TArray<FVector> PatrolPoints;
 
-    // Performance and LOD Integration
-    UPROPERTY(BlueprintReadOnly, Category = "Performance")
+    /** Current patrol point index */
+    UPROPERTY()
+    int32 CurrentPatrolIndex = 0;
+
+    // ============================================================================
+    // LOD AND PERFORMANCE VARIABLES
+    // ============================================================================
+
+    /** Current AI update frequency for LOD optimization */
+    UPROPERTY()
+    float AIUpdateFrequency = 10.0f;
+
+    /** Current behavior complexity multiplier */
+    UPROPERTY()
+    float BehaviorComplexityMultiplier = 1.0f;
+
+    /** Current LOD level assigned by LOD Manager */
+    UPROPERTY()
+    int32 CurrentLODLevel = 1;
+
+    // ============================================================================
+    // COORDINATION VARIABLES
+    // ============================================================================
+
+    /** Current defensive position for tactical coordination */
+    UPROPERTY()
+    FVector DefensivePosition = FVector::ZeroVector;
+
+    /** Whether this AI has a defensive position assigned */
+    UPROPERTY()
+    bool bHasDefensivePosition = false;
+
+    /** Current AI behavior mode */
+    UPROPERTY()
+    EAIBehaviorMode CurrentBehaviorMode = EAIBehaviorMode::Patrol;
+
+    /** Whether coordination with other AI is enabled */
+    UPROPERTY()
+    bool bCoordinationEnabled = true;
+
+    /** Current threat level assessment */
+    UPROPERTY()
+    EThreatLevel CurrentThreatLevel = EThreatLevel::Low;
+
+    // ============================================================================
+    // COMPONENT REFERENCES
+    // ============================================================================
+
+    /** Elite AI Intelligence Component for advanced behaviors */
+    UPROPERTY()
+    TObjectPtr<UEliteAIIntelligenceComponent> EliteIntelligence;
+
+    /** ACF Stealth Detection Component for player detection */
+    UPROPERTY()
+    TObjectPtr<UACFStealthDetectionComponent> StealthDetection;
+
+    /** LOD Manager reference for performance optimization */
+    UPROPERTY()
     TObjectPtr<UAILODManager> LODManager;
 
-    // Timer Management for Performance Optimization
+    // ============================================================================
+    // TIMER HANDLES
+    // ============================================================================
+
+    /** Timer for patrol movement */
+    UPROPERTY()
     FTimerHandle PatrolTimer;
+
+    /** Timer for investigation duration */
+    UPROPERTY()
     FTimerHandle InvestigationTimer;
+
+    /** Timer for elite system updates */
+    UPROPERTY()
     FTimerHandle EliteUpdateTimer;
 
-private:
-    // Internal Initialization and Setup
+    // ============================================================================
+    // INTERNAL PROCESSING FUNCTIONS (Non-UFUNCTION)
+    // ============================================================================
+
+    /** Initialize AI components and systems */
     void InitializeComponents();
+
+    /** Register with AI management systems */
     void RegisterWithManagers();
+
+    /** Setup ACF integration */
     void SetupACFIntegration();
 
-    // Patrol System Implementation
+    /** Configure ACF combat behavior */
+    void ConfigureCombatBehavior();
+
+    /** Generate patrol points around center */
     void GeneratePatrolPoints();
+
+    /** Move to next patrol point */
     void MoveToNextPatrolPoint();
+
+    /** Handle patrol point reached */
     void OnPatrolPointReached();
 
-    // Elite AI System Management
+    /** Handle state transition */
+    void HandleStateTransition(EPortalAIState FromState, EPortalAIState ToState);
+
+    /** Update combat state */
+    void UpdateCombatState();
+
+    /** Update elite systems */
     void UpdateEliteSystemsActivation();
+
+    /** Configure elite capabilities */
     void ConfigureEliteCapabilities();
 
-    // Performance Optimization Helpers
+    /** Optimize for current LOD */
     void OptimizeForCurrentLOD();
+
+    /** Update performance metrics */
     void UpdatePerformanceMetrics();
 
-    // ACF Combat System Integration
-    void ConfigureCombatBehavior();
-    void UpdateCombatState();
+    /** Apply behavior mode changes */
+    void ApplyBehaviorModeChanges(EAIBehaviorMode OldMode, EAIBehaviorMode NewMode);
+
+    /** Register with coordination systems */
+    void RegisterWithCoordinationSystems();
+
+    /** Unregister from coordination systems */
+    void UnregisterFromCoordinationSystems();
+
+    /** Should engage in combat */
     bool ShouldEngageInCombat() const;
 
-    // Internal State Management
-    void TransitionToState(EPortalAIState NewState);
-    void HandleStateTransition(EPortalAIState FromState, EPortalAIState ToState);
+    /** Start patrolling implementation (internal use) */
+    void StartPatrolling(FVector Center, float Radius = 500.0f);
+
+    // ============================================================================
+    // MOVEMENT AND PATHFINDING
+    // ============================================================================
+
+    /** Move completed callback */
+    UFUNCTION()
+    void OnMoveCompleted(FAIRequestID RequestID, EPathFollowingResult::Type Result);
 };
