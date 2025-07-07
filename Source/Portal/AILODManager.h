@@ -2,26 +2,27 @@
 
 #pragma once
 
-#include "ACFAIController.h"
 #include "Components/ActorComponent.h"
 #include "CoreMinimal.h"
 #include "Engine/World.h"
-#include "EngineUtils.h"
-#include "GameFramework/GameModeBase.h"
-#include "PortalDefenseAIController.h"
+#include "TimerManager.h"
 #include "AILODManager.generated.h"
+
+// Forward Declarations
+class AACFAIController;
+class APawn;
 
 UENUM(BlueprintType)
 enum class EAILODLevel : uint8 {
-    Inactive UMETA(DisplayName = "Inactive"),
-    Minimal UMETA(DisplayName = "Minimal"),
-    Standard UMETA(DisplayName = "Standard"),
-    High UMETA(DisplayName = "High"),
-    Maximum UMETA(DisplayName = "Maximum")
+    Inactive, // AI is paused, no behavior tree, no perception
+    Minimal, // Basic patrol only, reduced tick rate
+    Standard, // Normal AI behavior, standard tick rate
+    High, // Enhanced behavior, full perception
+    Maximum // All systems active, highest priority
 };
 
 USTRUCT(BlueprintType)
-struct FAILODSettings {
+struct PORTAL_API FAILODSettings {
     GENERATED_BODY()
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "LOD Settings")
@@ -46,39 +47,60 @@ struct FAILODSettings {
     int32 MaxMaximumLODAI = 8;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "LOD Settings")
-    float LODUpdateFrequency = 0.5f;
+    float LODUpdateFrequency = 0.25f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "LOD Settings")
-    bool bUsePlayerPredictiveLOD = true;
+    bool bUsePerformanceScaling = true;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "LOD Settings")
-    float PredictionRadius = 1500.0f;
+    bool bUsePlayerPredictiveLOD = false;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "LOD Settings")
+    float PlayerPredictionTime = 2.0f;
+
+    FAILODSettings()
+    {
+        InactiveDistance = 5000.0f;
+        MinimalDistance = 3500.0f;
+        StandardDistance = 2000.0f;
+        HighDistance = 1000.0f;
+        MaximumDistance = 500.0f;
+        MaxHighLODAI = 15;
+        MaxMaximumLODAI = 8;
+        LODUpdateFrequency = 0.25f;
+        bUsePerformanceScaling = true;
+        bUsePlayerPredictiveLOD = false;
+        PlayerPredictionTime = 2.0f;
+    }
 };
 
 USTRUCT(BlueprintType)
-struct FAILODData {
+struct PORTAL_API FAILODData {
     GENERATED_BODY()
 
-    UPROPERTY(BlueprintReadOnly, Category = "LOD Data")
-    TObjectPtr<AACFAIController> AIController;
+    UPROPERTY(BlueprintReadOnly, Category = "AI LOD")
+    TObjectPtr<AACFAIController> AIController = nullptr;
 
-    UPROPERTY(BlueprintReadOnly, Category = "LOD Data")
+    UPROPERTY(BlueprintReadOnly, Category = "AI LOD")
     EAILODLevel CurrentLODLevel = EAILODLevel::Standard;
 
-    UPROPERTY(BlueprintReadOnly, Category = "LOD Data")
+    UPROPERTY(BlueprintReadOnly, Category = "AI LOD")
     float DistanceToPlayer = 9999.0f;
 
-    UPROPERTY(BlueprintReadOnly, Category = "LOD Data")
+    UPROPERTY(BlueprintReadOnly, Category = "AI LOD")
     float LODPriority = 1.0f;
 
-    UPROPERTY(BlueprintReadOnly, Category = "LOD Data")
+    UPROPERTY(BlueprintReadOnly, Category = "AI LOD")
+    float LastLODUpdateTime = 0.0f;
+
+    UPROPERTY(BlueprintReadOnly, Category = "AI LOD")
     bool bInCombat = false;
 
-    UPROPERTY(BlueprintReadOnly, Category = "LOD Data")
+    UPROPERTY(BlueprintReadOnly, Category = "AI LOD")
     bool bIsEngagingPlayer = false;
 
-    UPROPERTY(BlueprintReadOnly, Category = "LOD Data")
-    float LastLODUpdateTime = 0.0f;
+    UPROPERTY(BlueprintReadOnly, Category = "AI LOD")
+    bool bForcedHighLOD = false;
 
     FAILODData()
     {
@@ -86,16 +108,15 @@ struct FAILODData {
         CurrentLODLevel = EAILODLevel::Standard;
         DistanceToPlayer = 9999.0f;
         LODPriority = 1.0f;
+        LastLODUpdateTime = 0.0f;
         bInCombat = false;
         bIsEngagingPlayer = false;
-        LastLODUpdateTime = 0.0f;
+        bForcedHighLOD = false;
     }
 };
 
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnAILODChanged, AACFAIController*, AIController, EAILODLevel, NewLODLevel);
-
 UCLASS(ClassGroup = (Custom), meta = (BlueprintSpawnableComponent))
-class AIFRAMEWORK_API UAILODManager : public UActorComponent {
+class PORTAL_API UAILODManager : public UActorComponent {
     GENERATED_BODY()
 
 public:
@@ -107,7 +128,7 @@ protected:
 
 public:
     // Singleton access
-    UFUNCTION(BlueprintPure, Category = "AI LOD", meta = (CallInEditor = "true"))
+    UFUNCTION(BlueprintPure, Category = "AI LOD", CallInEditor = true)
     static UAILODManager* GetInstance(UWorld* World);
 
     // AI Registration
@@ -150,42 +171,47 @@ public:
     UFUNCTION(BlueprintPure, Category = "AI LOD")
     FAILODSettings GetLODSettings() const { return LODSettings; }
 
-    // Events
-    UPROPERTY(BlueprintAssignable, Category = "AI LOD")
-    FOnAILODChanged OnAILODChanged;
-
 protected:
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "AI LOD")
-    FAILODSettings LODSettings;
-
+    // Core Data
     UPROPERTY(BlueprintReadOnly, Category = "AI LOD")
     TArray<FAILODData> RegisteredAI;
 
-    UPROPERTY(BlueprintReadOnly, Category = "AI LOD")
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "AI LOD")
+    FAILODSettings LODSettings;
+
+    // Performance Tracking
+    UPROPERTY(BlueprintReadOnly, Category = "Performance")
     float AverageFrameTime = 16.67f;
 
-    UPROPERTY(BlueprintReadOnly, Category = "AI LOD")
+    UPROPERTY(BlueprintReadOnly, Category = "Performance")
+    TArray<float> RecentFrameTimes;
+
+    // Player Reference Cache
+    UPROPERTY()
+    TObjectPtr<APawn> CachedPlayerPawn = nullptr;
+
+    UPROPERTY()
     FVector PredictedPlayerPosition = FVector::ZeroVector;
 
-    UPROPERTY(BlueprintReadOnly, Category = "AI LOD")
-    FVector LastPlayerPosition = FVector::ZeroVector;
+    // Timers
+    FTimerHandle LODUpdateTimer;
 
 private:
-    static TObjectPtr<UAILODManager> InstancePtr;
+    // Internal Methods
+    void UpdatePlayerReference();
+    void CleanupInvalidAI();
+    void CalculateLODPriorities();
+    void ApplyLODLimits();
+    void UpdatePerformanceMetrics();
+    void PredictPlayerMovement();
 
-    FTimerHandle LODUpdateTimer;
-    FTimerHandle PerformanceMonitorTimer;
-
-    TArray<float> FrameTimes;
-    TMap<TObjectPtr<AACFAIController>, float> ForcedLODTimers;
+    EAILODLevel CalculateOptimalLOD(const FAILODData& AIData) const;
+    float CalculateAIPriority(const FAILODData& AIData) const;
+    void SetAILODInternal(FAILODData& AIData, EAILODLevel NewLODLevel);
 
     void StartLODUpdateTimer();
     void StopLODUpdateTimer();
-    void OnLODUpdateTimer();
-    void MonitorPerformance();
-    void UpdatePlayerReference();
-    void PredictPlayerPosition();
-    EAILODLevel CalculateAILODLevel(const FAILODData& AIData) const;
-    void UpdateAILODData(FAILODData& AIData);
-    void ProcessForcedLODTimers();
+
+    // Singleton instance
+    static TObjectPtr<UAILODManager> Instance;
 };

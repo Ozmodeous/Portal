@@ -1,223 +1,181 @@
 // Copyright (C) Developed by Pask, Published by Dark Tower Interactive SRL 2024. All Rights Reserved.
 
 #include "EliteAIIntelligenceComponent.h"
-#include "BehaviorTree/BlackboardComponent.h"
-#include "Components/ACFActionsManagerComponent.h"
+#include "ACFAIController.h"
+#include "Components/ACFCombatBehaviourComponent.h"
 #include "Engine/World.h"
-#include "Game/ACFTypes.h"
-#include "GameFramework/PlayerController.h"
+#include "GameFramework/Character.h"
 #include "Kismet/GameplayStatics.h"
-#include "PortalDefenseAIController.h" // Include here instead of in header
-#include "TimerManager.h"
 
 UEliteAIIntelligenceComponent::UEliteAIIntelligenceComponent()
 {
     PrimaryComponentTick.bCanEverTick = true;
-    PrimaryComponentTick.TickInterval = 0.1f; // 10 FPS for performance
+    PrimaryComponentTick.TickInterval = 0.2f; // 5 FPS for elite intelligence
 
-    // Initialize default settings
     bEliteModeEnabled = false;
-    CurrentDifficultyLevel = EEliteDifficultyLevel::Novice;
-    CurrentIntelligenceMode = EEliteIntelligenceMode::Reactive;
-
-    // Initialize tracking variables
-    TrackedPlayer = nullptr;
-    TrackingStartTime = 0.0f;
-    bIsTrackingPlayer = false;
-
-    // Initialize prediction data
-    CachedPlayerPositionPrediction = FVector::ZeroVector;
-    PredictionConfidence = 0.0f;
-    LastPredictionTime = 0.0f;
-
-    // Initialize adaptation data
-    AdaptationCooldown = 0.0f;
-
-    // Initialize references
-    OwnerController = nullptr;
-    OwnerPawn = nullptr;
-
-    // Apply initial settings
-    ApplyDifficultySettings();
+    CurrentDifficulty = EEliteDifficultyLevel::Novice;
+    RecentFrameTimes.Reserve(30);
 }
 
 void UEliteAIIntelligenceComponent::BeginPlay()
 {
     Super::BeginPlay();
 
-    // Get owner references
-    OwnerController = Cast<APortalDefenseAIController>(GetOwner());
-    if (OwnerController) {
-        OwnerPawn = OwnerController->GetPawn();
-    }
+    OwnerAIController = Cast<AACFAIController>(GetOwner());
+    UpdateDifficultySettings();
 
-    // Initialize elite mode if enabled
-    if (bEliteModeEnabled) {
-        ApplyDifficultySettings();
-
-        // Start player tracking if possible
-        if (APlayerController* PC = GetWorld()->GetFirstPlayerController()) {
-            if (APawn* PlayerPawn = PC->GetPawn()) {
-                StartPlayerTracking(PlayerPawn);
-            }
-        }
-    }
-
-    UE_LOG(LogTemp, Log, TEXT("Elite AI Intelligence Component initialized for %s"),
-        OwnerController ? *OwnerController->GetName() : TEXT("Unknown"));
+    UE_LOG(LogTemp, Log, TEXT("Elite AI Intelligence initialized for %s"),
+        OwnerAIController ? *OwnerAIController->GetName() : TEXT("Unknown"));
 }
 
 void UEliteAIIntelligenceComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
 {
     Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
 
-    if (!bEliteModeEnabled || !bIsTrackingPlayer) {
+    if (!bEliteModeEnabled || !OwnerAIController)
         return;
-    }
 
-    // Update player pattern analysis
-    UpdatePlayerPattern();
+    UpdateFrameTiming(DeltaTime);
+    UpdatePlayerTracking();
 
-    // Update predictions
-    UpdatePredictions();
-
-    // Update adaptation logic
-    UpdateAdaptation();
-
-    // Reduce adaptation cooldown
-    if (AdaptationCooldown > 0.0f) {
-        AdaptationCooldown -= DeltaTime;
+    float CurrentTime = GetWorld()->GetTimeSeconds();
+    if (CurrentTime - LastAnalysisTime > 2.0f) {
+        AnalyzePlayerBehavior();
+        LastAnalysisTime = CurrentTime;
     }
 }
 
-// Core Elite AI Functions
 void UEliteAIIntelligenceComponent::SetEliteMode(bool bEnabled)
 {
     bEliteModeEnabled = bEnabled;
-
-    if (bEliteModeEnabled) {
-        ApplyDifficultySettings();
+    if (bEnabled) {
+        UpdateDifficultySettings();
         UE_LOG(LogTemp, Warning, TEXT("Elite AI Mode ENABLED for %s"),
-            OwnerController ? *OwnerController->GetName() : TEXT("Unknown"));
-    } else {
-        StopPlayerTracking();
-        ResetBehaviorPatterns();
-        UE_LOG(LogTemp, Log, TEXT("Elite AI Mode disabled for %s"),
-            OwnerController ? *OwnerController->GetName() : TEXT("Unknown"));
+            OwnerAIController ? *OwnerAIController->GetName() : TEXT("Unknown"));
     }
 }
 
-void UEliteAIIntelligenceComponent::SetDifficultyLevel(EEliteDifficultyLevel NewLevel)
+void UEliteAIIntelligenceComponent::SetDifficultyLevel(EEliteDifficultyLevel NewDifficulty)
 {
-    CurrentDifficultyLevel = NewLevel;
-    ApplyDifficultySettings();
-
-    UE_LOG(LogTemp, Warning, TEXT("Elite AI Difficulty set to %d for %s"),
-        (int32)NewLevel, OwnerController ? *OwnerController->GetName() : TEXT("Unknown"));
+    CurrentDifficulty = NewDifficulty;
+    UpdateDifficultySettings();
 }
 
-void UEliteAIIntelligenceComponent::SetIntelligenceMode(EEliteIntelligenceMode NewMode)
+void UEliteAIIntelligenceComponent::RecordPlayerAction(APawn* Player, const FVector& ActionLocation, const FString& ActionType)
 {
-    CurrentIntelligenceMode = NewMode;
-    CurrentSettings.bCanCounterAdapt = (NewMode == EEliteIntelligenceMode::Adaptive || NewMode == EEliteIntelligenceMode::Strategic || NewMode == EEliteIntelligenceMode::Psychological);
-}
-
-// Player Analysis Functions
-void UEliteAIIntelligenceComponent::StartPlayerTracking(APawn* Player)
-{
-    if (!Player || !bEliteModeEnabled) {
+    if (!Player || !bEliteModeEnabled)
         return;
-    }
 
     TrackedPlayer = Player;
-    bIsTrackingPlayer = true;
-    TrackingStartTime = GetWorld()->GetTimeSeconds();
+    float CurrentTime = GetWorld()->GetTimeSeconds();
 
-    // Reset pattern data
-    CurrentPlayerPattern = FPlayerBehaviorPattern();
-
-    UE_LOG(LogTemp, Log, TEXT("Elite AI started tracking player: %s"), *Player->GetName());
-}
-
-void UEliteAIIntelligenceComponent::StopPlayerTracking()
-{
-    TrackedPlayer = nullptr;
-    bIsTrackingPlayer = false;
-    UE_LOG(LogTemp, Log, TEXT("Elite AI stopped tracking player"));
-}
-
-void UEliteAIIntelligenceComponent::RecordPlayerPosition(const FVector& Position)
-{
-    if (!bIsTrackingPlayer || CurrentSettings.PatternAnalysisDepth <= 0.0f) {
-        return;
-    }
-
-    CurrentPlayerPattern.RecentPositions.Add(Position);
-
-    // Keep only recent positions (based on analysis depth)
-    int32 MaxPositions = FMath::FloorToInt(CurrentSettings.PatternAnalysisDepth);
-    if (CurrentPlayerPattern.RecentPositions.Num() > MaxPositions) {
+    // Record position
+    CurrentPlayerPattern.RecentPositions.Add(ActionLocation);
+    if (CurrentPlayerPattern.RecentPositions.Num() > 15) {
         CurrentPlayerPattern.RecentPositions.RemoveAt(0);
     }
 
-    // Update average movement speed
-    if (CurrentPlayerPattern.RecentPositions.Num() >= 2) {
-        FVector LastPos = CurrentPlayerPattern.RecentPositions[CurrentPlayerPattern.RecentPositions.Num() - 2];
-        float Distance = FVector::Dist(Position, LastPos);
-        float DeltaTime = 0.1f; // Assuming 10 FPS tick rate
-        float Speed = Distance / DeltaTime;
-
-        CurrentPlayerPattern.AverageMovementSpeed = (CurrentPlayerPattern.AverageMovementSpeed + Speed) * 0.5f;
-    }
-}
-
-void UEliteAIIntelligenceComponent::RecordPlayerAttack(const FVector& AttackPosition, float Timing)
-{
-    if (!bIsTrackingPlayer) {
-        return;
-    }
-
-    CurrentPlayerPattern.AttackPositions.Add(AttackPosition);
-    CurrentPlayerPattern.AttackTimings.Add(Timing);
-
-    // Calculate attack frequency
-    if (CurrentPlayerPattern.AttackTimings.Num() >= 2) {
-        float TimeDiff = CurrentPlayerPattern.AttackTimings.Last() - CurrentPlayerPattern.AttackTimings[CurrentPlayerPattern.AttackTimings.Num() - 2];
-        CurrentPlayerPattern.AttackFrequency = 1.0f / FMath::Max(TimeDiff, 0.1f);
-    }
-
-    // Update preferred engagement distance
-    if (OwnerPawn && CurrentPlayerPattern.AttackPositions.Num() > 0) {
-        float TotalDistance = 0.0f;
-        for (const FVector& Pos : CurrentPlayerPattern.AttackPositions) {
-            TotalDistance += FVector::Dist(OwnerPawn->GetActorLocation(), Pos);
+    // Record attack timing
+    if (ActionType.Contains("Attack") || ActionType.Contains("Fire")) {
+        CurrentPlayerPattern.AttackTimings.Add(CurrentTime);
+        if (CurrentPlayerPattern.AttackTimings.Num() > 8) {
+            CurrentPlayerPattern.AttackTimings.RemoveAt(0);
         }
-        CurrentPlayerPattern.PreferredEngagementDistance = TotalDistance / CurrentPlayerPattern.AttackPositions.Num();
-    }
-}
-
-void UEliteAIIntelligenceComponent::RecordPlayerDodge(const FVector& DodgeDirection)
-{
-    if (!bIsTrackingPlayer) {
-        return;
     }
 
-    CurrentPlayerPattern.DodgeDirections.Add(DodgeDirection);
-
-    // Calculate preferred dodge direction
-    if (CurrentPlayerPattern.DodgeDirections.Num() > 0) {
-        FVector TotalDirection = FVector::ZeroVector;
-        for (const FVector& Dir : CurrentPlayerPattern.DodgeDirections) {
-            TotalDirection += Dir;
+    // Record dodge direction
+    if (ActionType.Contains("Dodge") || ActionType.Contains("Evade")) {
+        if (OwnerAIController && OwnerAIController->GetPawn()) {
+            FVector DodgeDir = (ActionLocation - OwnerAIController->GetPawn()->GetActorLocation()).GetSafeNormal();
+            CurrentPlayerPattern.DodgeDirections.Add(DodgeDir);
+            if (CurrentPlayerPattern.DodgeDirections.Num() > 6) {
+                CurrentPlayerPattern.DodgeDirections.RemoveAt(0);
+            }
         }
-        CurrentPlayerPattern.PreferredDodgeDirection = TotalDirection / CurrentPlayerPattern.DodgeDirections.Num();
     }
 }
 
-// Prediction Functions
+EAICombatState UEliteAIIntelligenceComponent::GetOptimalCombatState(APawn* Target)
+{
+    if (!Target || !OwnerAIController)
+        return EAICombatState::EMeleeCombat;
+
+    // Try to find ACF Combat Behavior Component on the AI's pawn
+    UACFCombatBehaviourComponent* CombatComp = nullptr;
+    if (APawn* AIPawn = OwnerAIController->GetPawn()) {
+        CombatComp = AIPawn->FindComponentByClass<UACFCombatBehaviourComponent>();
+    }
+
+    if (!CombatComp)
+        return EAICombatState::EMeleeCombat;
+
+    float DistanceToTarget = FVector::Dist(OwnerAIController->GetPawn()->GetActorLocation(), Target->GetActorLocation());
+
+    // Use ACF's built-in distance-based state selection
+    EAICombatState OptimalState = CombatComp->GetBestCombatStateByTargetDistance(DistanceToTarget);
+
+    // Elite AI enhancement: Consider player patterns
+    if (CurrentSettings.FlankingIntelligence > 0.5f && CurrentPlayerPattern.bPrefersCircleStrafing) {
+        // Player circle strafes, use ranged combat
+        return EAICombatState::ERangedCombat;
+    }
+
+    if (CurrentSettings.PredictionAccuracy > 0.7f && CurrentPlayerPattern.PredictabilityScore > 0.8f) {
+        // Predictable player, use aggressive melee
+        return EAICombatState::EMeleeCombat;
+    }
+
+    return OptimalState;
+}
+
+FGameplayTag UEliteAIIntelligenceComponent::GetOptimalACFAction(EAICombatState CombatState)
+{
+    if (!OwnerAIController)
+        return FGameplayTag();
+
+    // Try to find ACF Combat Behavior Component
+    UACFCombatBehaviourComponent* CombatComp = nullptr;
+    if (APawn* AIPawn = OwnerAIController->GetPawn()) {
+        CombatComp = AIPawn->FindComponentByClass<UACFCombatBehaviourComponent>();
+    }
+
+    if (!CombatComp)
+        return FGameplayTag();
+
+    // Elite AI enhancement: Modify timing based on player patterns
+    if (CurrentSettings.bCanCounterAdapt && CurrentPlayerPattern.AttackTimings.Num() > 2) {
+        float TimeSinceLastPlayerAttack = GetWorld()->GetTimeSeconds() - (CurrentPlayerPattern.AttackTimings.Num() > 0 ? CurrentPlayerPattern.AttackTimings.Last() : 0.0f);
+
+        // Counter-attack timing based on player patterns
+        if (TimeSinceLastPlayerAttack < 0.3f) {
+            // Player just attacked, use defensive actions
+            OnEliteBehaviorTriggered.Broadcast("DefensiveCounter", CurrentSettings.PredictionAccuracy);
+        }
+    }
+
+    // Return empty tag to let ACF handle standard action selection
+    return FGameplayTag();
+}
+
+bool UEliteAIIntelligenceComponent::ShouldDodgeNow(const FVector& ThreatDirection, float ThreatSpeed)
+{
+    if (!bEliteModeEnabled || CurrentSettings.DodgePerfection < 0.1f)
+        return false;
+
+    // Frame-perfect timing for highest difficulties
+    if (CurrentSettings.bUsesFramePerfectTiming) {
+        float ThreatDistance = ThreatDirection.Size();
+        float TimeToImpact = ThreatDistance / ThreatSpeed;
+        float ReactionTime = 0.25f * CurrentSettings.ReactionTimeMultiplier;
+        return FMath::Abs(TimeToImpact - ReactionTime) < (AverageFrameTime * 0.001f);
+    }
+
+    return FMath::RandRange(0.0f, 1.0f) < CurrentSettings.DodgePerfection;
+}
+
 FVector UEliteAIIntelligenceComponent::PredictPlayerPosition(float PredictionTime)
 {
-    if (!TrackedPlayer || !bIsTrackingPlayer || CurrentSettings.PredictionAccuracy <= 0.0f) {
+    if (!TrackedPlayer || CurrentPlayerPattern.RecentPositions.Num() < 2) {
         return TrackedPlayer ? TrackedPlayer->GetActorLocation() : FVector::ZeroVector;
     }
 
@@ -227,451 +185,210 @@ FVector UEliteAIIntelligenceComponent::PredictPlayerPosition(float PredictionTim
     // Basic linear prediction
     FVector BasicPrediction = CurrentPos + (CurrentVel * PredictionTime);
 
-    // Enhanced prediction based on difficulty
-    if (CurrentSettings.PredictionAccuracy > 0.5f && CurrentPlayerPattern.RecentPositions.Num() > 3) {
-        // Acceleration-based prediction
-        FVector LastVel = (CurrentPlayerPattern.RecentPositions.Last() - CurrentPlayerPattern.RecentPositions[CurrentPlayerPattern.RecentPositions.Num() - 2]) / (1.0f / 60.0f);
+    // Enhanced prediction for higher difficulties
+    if (CurrentSettings.PredictionAccuracy > 0.5f && CurrentPlayerPattern.RecentPositions.Num() >= 3) {
+        // Account for circle strafing
+        if (CurrentPlayerPattern.bPrefersCircleStrafing && OwnerAIController && OwnerAIController->GetPawn()) {
+            FVector ToAI = (OwnerAIController->GetPawn()->GetActorLocation() - CurrentPos).GetSafeNormal();
+            FVector CircleDir = FVector::CrossProduct(ToAI, FVector::UpVector);
+            float Distance = FVector::Dist(CurrentPos, OwnerAIController->GetPawn()->GetActorLocation());
 
-        FVector Acceleration = (CurrentVel - LastVel) / (1.0f / 60.0f);
-
-        // Kinematic prediction: pos = pos0 + vel*t + 0.5*acc*t^2
-        CachedPlayerPositionPrediction = CurrentPos + (CurrentVel * PredictionTime) + (0.5f * Acceleration * PredictionTime * PredictionTime);
-    } else {
-        CachedPlayerPositionPrediction = BasicPrediction;
+            float PredictedAngle = CurrentPlayerPattern.AverageMovementSpeed * PredictionTime / Distance;
+            return OwnerAIController->GetPawn()->GetActorLocation() + FVector(FMath::Cos(PredictedAngle), FMath::Sin(PredictedAngle), 0.0f) * Distance;
+        }
     }
 
-    // Pattern-based trajectory modification
-    if (CurrentSettings.bCanCounterAdapt && CurrentPlayerPattern.bPrefersCircleStrafing) {
-        // Predict circular movement
-        float AngularVelocity = 2.0f; // Radians per second - could be learned
-        FVector ToPlayer = CurrentPos - OwnerPawn->GetActorLocation();
-        float CurrentAngle = FMath::Atan2(ToPlayer.Y, ToPlayer.X);
-        float PredictedAngle = CurrentAngle + (AngularVelocity * PredictionTime);
-
-        float Distance = ToPlayer.Size();
-        CachedPlayerPositionPrediction = OwnerPawn->GetActorLocation() + FVector(FMath::Cos(PredictedAngle), FMath::Sin(PredictedAngle), 0.0f) * Distance;
-    }
-
-    LastPredictionTime = GetWorld()->GetTimeSeconds();
-    return CachedPlayerPositionPrediction;
+    return BasicPrediction;
 }
 
-FVector UEliteAIIntelligenceComponent::PredictPlayerMovement(float TimeAhead)
+bool UEliteAIIntelligenceComponent::ShouldCounterAttack()
 {
-    return PredictPlayerPosition(TimeAhead);
-}
-
-bool UEliteAIIntelligenceComponent::ShouldPredictDodge(const FVector& AttackDirection)
-{
-    if (!bIsTrackingPlayer || CurrentSettings.PredictionAccuracy < 0.3f) {
+    if (!bEliteModeEnabled || CurrentPlayerPattern.AttackTimings.Num() < 2)
         return false;
-    }
 
-    // Check if player has consistent dodge patterns
-    if (CurrentPlayerPattern.DodgeDirections.Num() >= 3) {
-        // Calculate pattern consistency
-        float DotSum = 0.0f;
-        for (int32 i = 0; i < CurrentPlayerPattern.DodgeDirections.Num() - 1; ++i) {
-            DotSum += FVector::DotProduct(CurrentPlayerPattern.DodgeDirections[i],
-                CurrentPlayerPattern.DodgeDirections[i + 1]);
+    // Analyze player attack patterns for counter opportunities
+    float TimeSinceLastAttack = GetWorld()->GetTimeSeconds() - CurrentPlayerPattern.AttackTimings.Last();
+
+    if (CurrentPlayerPattern.AttackTimings.Num() >= 3) {
+        // Calculate average time between attacks
+        float TotalInterval = 0.0f;
+        for (int32 i = 1; i < CurrentPlayerPattern.AttackTimings.Num(); i++) {
+            TotalInterval += CurrentPlayerPattern.AttackTimings[i] - CurrentPlayerPattern.AttackTimings[i - 1];
         }
-        float Consistency = DotSum / (CurrentPlayerPattern.DodgeDirections.Num() - 1);
+        float AvgInterval = TotalInterval / (CurrentPlayerPattern.AttackTimings.Num() - 1);
 
-        return Consistency > 0.5f; // 50% consistency threshold
+        // Counter-attack during player's vulnerable window
+        return TimeSinceLastAttack > (AvgInterval * 0.3f) && TimeSinceLastAttack < (AvgInterval * 0.7f);
     }
 
-    return false;
+    return TimeSinceLastAttack > 0.5f && TimeSinceLastAttack < 2.0f;
 }
 
-// Adaptation Functions
-void UEliteAIIntelligenceComponent::AdaptToPlayerBehavior()
+void UEliteAIIntelligenceComponent::UpdateDifficultySettings()
 {
-    if (!bIsTrackingPlayer || AdaptationCooldown > 0.0f || CurrentSettings.AdaptationSpeed <= 0.0f) {
-        return;
-    }
-
-    AnalyzePlayerMovement();
-    AnalyzePlayerCombat();
-
-    // Set adaptation cooldown
-    AdaptationCooldown = 5.0f / CurrentSettings.AdaptationSpeed;
-
-    UE_LOG(LogTemp, VeryVerbose, TEXT("Elite AI adapted to player behavior"));
+    CurrentSettings = GetSettingsForDifficulty(CurrentDifficulty);
 }
 
-void UEliteAIIntelligenceComponent::CounterPlayerStrategy()
+void UEliteAIIntelligenceComponent::AnalyzePlayerBehavior()
 {
-    if (!CurrentSettings.bCanCounterAdapt || !bIsTrackingPlayer) {
+    if (!TrackedPlayer || CurrentPlayerPattern.RecentPositions.Num() < 3)
         return;
-    }
 
-    // Counter circle strafing
-    if (CurrentPlayerPattern.bPrefersCircleStrafing) {
-        // Implement counter-strafing or prediction
-        if (OwnerController) {
-            OwnerController->ReceiveOverlordCommand("CounterStrafe",
-                TArray<FVector> { CurrentPlayerPattern.PreferredDodgeDirection });
+    // Calculate average movement speed
+    float TotalSpeed = 0.0f;
+    for (int32 i = 1; i < CurrentPlayerPattern.RecentPositions.Num(); i++) {
+        float Distance = FVector::Dist(CurrentPlayerPattern.RecentPositions[i], CurrentPlayerPattern.RecentPositions[i - 1]);
+        TotalSpeed += Distance;
+    }
+    CurrentPlayerPattern.AverageMovementSpeed = TotalSpeed / FMath::Max(1, CurrentPlayerPattern.RecentPositions.Num() - 1);
+
+    // Calculate preferred engagement distance
+    if (CurrentPlayerPattern.RecentPositions.Num() > 0 && OwnerAIController && OwnerAIController->GetPawn()) {
+        float TotalDistance = 0.0f;
+        for (const FVector& Pos : CurrentPlayerPattern.RecentPositions) {
+            TotalDistance += FVector::Dist(Pos, OwnerAIController->GetPawn()->GetActorLocation());
         }
+        CurrentPlayerPattern.PreferredEngagementDistance = TotalDistance / CurrentPlayerPattern.RecentPositions.Num();
     }
 
-    // Counter cover usage
-    if (CurrentPlayerPattern.bUsesEnvironmentCover) {
-        // Implement flanking or area denial
-        if (OwnerController) {
-            OwnerController->ReceiveOverlordCommand("FlankCover", TArray<FVector>());
+    // Calculate preferred dodge direction
+    if (CurrentPlayerPattern.DodgeDirections.Num() > 1) {
+        FVector AverageDodge = FVector::ZeroVector;
+        for (const FVector& Dodge : CurrentPlayerPattern.DodgeDirections) {
+            AverageDodge += Dodge;
         }
-    }
-}
-
-FString UEliteAIIntelligenceComponent::GetRecommendedTactic()
-{
-    if (!bIsTrackingPlayer) {
-        return "Patrol";
-    }
-
-    // Analyze current situation and recommend tactics
-    float EngagementDistance = CurrentPlayerPattern.PreferredEngagementDistance;
-
-    if (EngagementDistance < 500.0f) {
-        return "CloseQuarters";
-    } else if (EngagementDistance > 1500.0f) {
-        return "LongRange";
-    } else if (CurrentPlayerPattern.bPrefersCircleStrafing) {
-        return "CounterStrafe";
-    } else if (CurrentPlayerPattern.bUsesEnvironmentCover) {
-        return "FlankingManeuver";
-    }
-
-    return "StandardEngagement";
-}
-
-void UEliteAIIntelligenceComponent::RecordTacticSuccess(const FString& TacticName, bool bSuccessful)
-{
-    if (!TacticSuccessRates.Contains(TacticName)) {
-        TacticSuccessRates.Add(TacticName, 0.5f); // Start with neutral rating
-    }
-
-    float& SuccessRate = TacticSuccessRates[TacticName];
-    float Adjustment = bSuccessful ? 0.1f : -0.1f;
-    SuccessRate = FMath::Clamp(SuccessRate + Adjustment, 0.0f, 1.0f);
-
-    // Track recent tactics
-    RecentTactics.Add(TacticName);
-    if (RecentTactics.Num() > 10) {
-        RecentTactics.RemoveAt(0);
-    }
-}
-
-// Combat Intelligence
-float UEliteAIIntelligenceComponent::CalculateOptimalEngagementDistance()
-{
-    if (!bIsTrackingPlayer) {
-        return 1000.0f; // Default engagement distance
-    }
-
-    // Factor in player's preferred engagement distance
-    float PlayerPreference = CurrentPlayerPattern.PreferredEngagementDistance;
-
-    // Counter player preference
-    if (CurrentSettings.bCanCounterAdapt) {
-        if (PlayerPreference < 600.0f) {
-            return PlayerPreference + 400.0f; // Stay at medium range if player prefers close
-        } else {
-            return PlayerPreference - 300.0f; // Close distance if player prefers long range
-        }
-    }
-
-    return FMath::Clamp(PlayerPreference, 500.0f, 1500.0f);
-}
-
-FVector UEliteAIIntelligenceComponent::CalculateOptimalAttackPosition(const FVector& PlayerPosition)
-{
-    if (!OwnerPawn) {
-        return PlayerPosition;
-    }
-
-    float OptimalDistance = CalculateOptimalEngagementDistance();
-    FVector ToPlayer = (PlayerPosition - OwnerPawn->GetActorLocation()).GetSafeNormal();
-
-    // Position at optimal distance
-    FVector BasePosition = PlayerPosition - (ToPlayer * OptimalDistance);
-
-    // Add tactical offset based on player patterns
-    if (CurrentPlayerPattern.bPrefersCircleStrafing) {
-        // Position to intercept strafing
-        FVector PerpendicularOffset = FVector::CrossProduct(ToPlayer, FVector::UpVector) * 200.0f;
-        BasePosition += PerpendicularOffset;
-    }
-
-    return BasePosition;
-}
-
-bool UEliteAIIntelligenceComponent::ShouldUseFlankingManeuver()
-{
-    if (CurrentSettings.bCanCounterAdapt && bIsTrackingPlayer) {
-        // Use flanking if player uses cover frequently
-        return CurrentPlayerPattern.bUsesEnvironmentCover;
-    }
-
-    return false;
-}
-
-bool UEliteAIIntelligenceComponent::ShouldRetreat()
-{
-    // Implement retreat logic based on tactical situation
-    // This could factor in health, ammunition, tactical advantage, etc.
-    return false; // Placeholder
-}
-
-// Configuration Functions
-void UEliteAIIntelligenceComponent::UpdateEliteSettings()
-{
-    ApplyDifficultySettings();
-}
-
-void UEliteAIIntelligenceComponent::ResetBehaviorPatterns()
-{
-    CurrentPlayerPattern = FPlayerBehaviorPattern();
-    TacticSuccessRates.Empty();
-    RecentTactics.Empty();
-    AdaptationCooldown = 0.0f;
-    PredictionConfidence = 0.0f;
-}
-
-// Private Helper Functions
-void UEliteAIIntelligenceComponent::UpdatePlayerPattern()
-{
-    if (!TrackedPlayer) {
-        return;
-    }
-
-    // Record current position
-    RecordPlayerPosition(TrackedPlayer->GetActorLocation());
-
-    // Analyze movement patterns
-    AnalyzePlayerMovement();
-}
-
-void UEliteAIIntelligenceComponent::UpdatePredictions()
-{
-    if (!bIsTrackingPlayer || CurrentSettings.PredictionAccuracy <= 0.0f) {
-        return;
-    }
-
-    // Cache predictions for performance
-    CachePredictions();
-
-    // Update prediction confidence
-    PredictionConfidence = CalculatePatternConfidence();
-}
-
-void UEliteAIIntelligenceComponent::UpdateAdaptation()
-{
-    if (!CurrentSettings.bCanCounterAdapt || AdaptationCooldown > 0.0f) {
-        return;
-    }
-
-    // Periodic adaptation based on learned patterns
-    if (IsPlayerBehaviorConsistent()) {
-        CounterPlayerStrategy();
-    }
-}
-
-void UEliteAIIntelligenceComponent::AnalyzePlayerMovement()
-{
-    if (CurrentPlayerPattern.RecentPositions.Num() < 5) {
-        return;
+        CurrentPlayerPattern.PreferredDodgeDirection = AverageDodge.GetSafeNormal();
     }
 
     // Detect circle strafing
-    float CircularityScore = 0.0f;
-    FVector CenterPoint = FVector::ZeroVector;
+    CurrentPlayerPattern.bPrefersCircleStrafing = DetectCircleStrafePattern();
 
-    // Calculate approximate center
-    for (const FVector& Pos : CurrentPlayerPattern.RecentPositions) {
-        CenterPoint += Pos;
-    }
-    CenterPoint /= CurrentPlayerPattern.RecentPositions.Num();
-
-    // Check if movement forms circular pattern
-    float AvgDistance = 0.0f;
-    for (const FVector& Pos : CurrentPlayerPattern.RecentPositions) {
-        AvgDistance += FVector::Dist(Pos, CenterPoint);
-    }
-    AvgDistance /= CurrentPlayerPattern.RecentPositions.Num();
-
-    float DistanceVariance = 0.0f;
-    for (const FVector& Pos : CurrentPlayerPattern.RecentPositions) {
-        float Diff = FVector::Dist(Pos, CenterPoint) - AvgDistance;
-        DistanceVariance += Diff * Diff;
-    }
-    DistanceVariance /= CurrentPlayerPattern.RecentPositions.Num();
-
-    // Low variance in distance from center indicates circular movement
-    CurrentPlayerPattern.bPrefersCircleStrafing = (DistanceVariance < 10000.0f && AvgDistance > 300.0f);
+    // Calculate predictability
+    CurrentPlayerPattern.PredictabilityScore = CalculatePredictabilityScore();
 }
 
-void UEliteAIIntelligenceComponent::AnalyzePlayerCombat()
+void UEliteAIIntelligenceComponent::UpdatePlayerTracking()
 {
-    // Analyze combat patterns based on attack positions and timings
-    if (CurrentPlayerPattern.AttackPositions.Num() >= 3) {
-        // Check if player uses cover (attacks from similar positions)
-        float PositionVariance = 0.0f;
-        FVector AvgAttackPos = FVector::ZeroVector;
+    if (!OwnerAIController)
+        return;
 
-        for (const FVector& Pos : CurrentPlayerPattern.AttackPositions) {
-            AvgAttackPos += Pos;
+    if (AActor* FocusActor = OwnerAIController->GetFocusActor()) {
+        if (APawn* PlayerPawn = Cast<APawn>(FocusActor)) {
+            if (PlayerPawn->IsPlayerControlled()) {
+                TrackedPlayer = PlayerPawn;
+            }
         }
-        AvgAttackPos /= CurrentPlayerPattern.AttackPositions.Num();
-
-        for (const FVector& Pos : CurrentPlayerPattern.AttackPositions) {
-            PositionVariance += FVector::DistSquared(Pos, AvgAttackPos);
-        }
-        PositionVariance /= CurrentPlayerPattern.AttackPositions.Num();
-
-        // Low variance indicates consistent cover usage
-        CurrentPlayerPattern.bUsesEnvironmentCover = (PositionVariance < 250000.0f);
     }
 }
 
-void UEliteAIIntelligenceComponent::ApplyDifficultySettings()
+FEliteSettings UEliteAIIntelligenceComponent::GetSettingsForDifficulty(EEliteDifficultyLevel Difficulty) const
 {
-    // Configure settings based on difficulty level
-    switch (CurrentDifficultyLevel) {
+    FEliteSettings Settings;
+
+    switch (Difficulty) {
     case EEliteDifficultyLevel::Disabled:
-        CurrentSettings.ReactionTimeMultiplier = 1.0f;
-        CurrentSettings.AccuracyMultiplier = 1.0f;
-        CurrentSettings.PredictionAccuracy = 0.0f;
-        CurrentSettings.AdaptationSpeed = 0.0f;
-        CurrentSettings.bCanCounterAdapt = false;
         break;
 
     case EEliteDifficultyLevel::Novice:
-        CurrentSettings.ReactionTimeMultiplier = 0.9f;
-        CurrentSettings.AccuracyMultiplier = 1.1f;
-        CurrentSettings.PredictionAccuracy = 0.2f;
-        CurrentSettings.AdaptationSpeed = 0.5f;
-        CurrentSettings.bCanCounterAdapt = false;
+        Settings.ReactionTimeMultiplier = 1.2f;
+        Settings.PredictionAccuracy = 0.1f;
+        Settings.DodgePerfection = 0.2f;
         break;
 
     case EEliteDifficultyLevel::Skilled:
-        CurrentSettings.ReactionTimeMultiplier = 0.8f;
-        CurrentSettings.AccuracyMultiplier = 1.2f;
-        CurrentSettings.PredictionAccuracy = 0.4f;
-        CurrentSettings.AdaptationSpeed = 0.8f;
-        CurrentSettings.bCanCounterAdapt = false;
+        Settings.ReactionTimeMultiplier = 1.0f;
+        Settings.PredictionAccuracy = 0.3f;
+        Settings.DodgePerfection = 0.4f;
+        Settings.FlankingIntelligence = 0.3f;
         break;
 
     case EEliteDifficultyLevel::Veteran:
-        CurrentSettings.ReactionTimeMultiplier = 0.7f;
-        CurrentSettings.AccuracyMultiplier = 1.3f;
-        CurrentSettings.PredictionAccuracy = 0.6f;
-        CurrentSettings.AdaptationSpeed = 1.0f;
-        CurrentSettings.bCanCounterAdapt = true;
+        Settings.ReactionTimeMultiplier = 0.8f;
+        Settings.PredictionAccuracy = 0.5f;
+        Settings.DodgePerfection = 0.6f;
+        Settings.FlankingIntelligence = 0.5f;
         break;
 
     case EEliteDifficultyLevel::Expert:
-        CurrentSettings.ReactionTimeMultiplier = 0.6f;
-        CurrentSettings.AccuracyMultiplier = 1.4f;
-        CurrentSettings.PredictionAccuracy = 0.7f;
-        CurrentSettings.AdaptationSpeed = 1.2f;
-        CurrentSettings.bCanCounterAdapt = true;
+        Settings.ReactionTimeMultiplier = 0.6f;
+        Settings.PredictionAccuracy = 0.7f;
+        Settings.DodgePerfection = 0.8f;
+        Settings.FlankingIntelligence = 0.7f;
+        Settings.bCanCounterAdapt = true;
         break;
 
     case EEliteDifficultyLevel::Master:
-        CurrentSettings.ReactionTimeMultiplier = 0.5f;
-        CurrentSettings.AccuracyMultiplier = 1.5f;
-        CurrentSettings.PredictionAccuracy = 0.8f;
-        CurrentSettings.AdaptationSpeed = 1.5f;
-        CurrentSettings.bCanCounterAdapt = true;
-        CurrentSettings.bUsePsychologicalWarfare = true;
+        Settings.ReactionTimeMultiplier = 0.4f;
+        Settings.PredictionAccuracy = 0.85f;
+        Settings.DodgePerfection = 0.9f;
+        Settings.FlankingIntelligence = 0.9f;
+        Settings.bCanCounterAdapt = true;
         break;
 
     case EEliteDifficultyLevel::Grandmaster:
-        CurrentSettings.ReactionTimeMultiplier = 0.4f;
-        CurrentSettings.AccuracyMultiplier = 1.6f;
-        CurrentSettings.PredictionAccuracy = 0.85f;
-        CurrentSettings.AdaptationSpeed = 1.8f;
-        CurrentSettings.bCanCounterAdapt = true;
-        CurrentSettings.bUsePsychologicalWarfare = true;
-        break;
-
-    case EEliteDifficultyLevel::Legend:
-        CurrentSettings.ReactionTimeMultiplier = 0.3f;
-        CurrentSettings.AccuracyMultiplier = 1.7f;
-        CurrentSettings.PredictionAccuracy = 0.9f;
-        CurrentSettings.AdaptationSpeed = 2.0f;
-        CurrentSettings.bCanCounterAdapt = true;
-        CurrentSettings.bUsePsychologicalWarfare = true;
-        break;
-
-    case EEliteDifficultyLevel::Nightmare:
-        CurrentSettings.ReactionTimeMultiplier = 0.25f;
-        CurrentSettings.AccuracyMultiplier = 1.8f;
-        CurrentSettings.PredictionAccuracy = 0.93f;
-        CurrentSettings.AdaptationSpeed = 2.5f;
-        CurrentSettings.bCanCounterAdapt = true;
-        CurrentSettings.bUsePsychologicalWarfare = true;
-        break;
-
-    case EEliteDifficultyLevel::Impossible:
-        CurrentSettings.ReactionTimeMultiplier = 0.2f;
-        CurrentSettings.AccuracyMultiplier = 1.9f;
-        CurrentSettings.PredictionAccuracy = 0.95f;
-        CurrentSettings.AdaptationSpeed = 3.0f;
-        CurrentSettings.bCanCounterAdapt = true;
-        CurrentSettings.bUsePsychologicalWarfare = true;
-        break;
-
-    case EEliteDifficultyLevel::Godlike:
-        CurrentSettings.ReactionTimeMultiplier = 0.1f;
-        CurrentSettings.AccuracyMultiplier = 2.0f;
-        CurrentSettings.PredictionAccuracy = 0.98f;
-        CurrentSettings.AdaptationSpeed = 4.0f;
-        CurrentSettings.bCanCounterAdapt = true;
-        CurrentSettings.bUsePsychologicalWarfare = true;
+        Settings.ReactionTimeMultiplier = 0.2f;
+        Settings.PredictionAccuracy = 0.95f;
+        Settings.DodgePerfection = 0.95f;
+        Settings.FlankingIntelligence = 1.0f;
+        Settings.bCanCounterAdapt = true;
+        Settings.bUsesFramePerfectTiming = true;
         break;
     }
 
-    // Set pattern analysis depth based on difficulty
-    CurrentSettings.PatternAnalysisDepth = 5.0f + (float)CurrentDifficultyLevel * 2.0f;
+    return Settings;
 }
 
-void UEliteAIIntelligenceComponent::CachePredictions()
+bool UEliteAIIntelligenceComponent::DetectCircleStrafePattern() const
 {
-    // Cache expensive predictions for performance
-    if (TrackedPlayer) {
-        CachedPlayerPositionPrediction = PredictPlayerPosition(1.0f);
+    if (CurrentPlayerPattern.RecentPositions.Num() < 5 || !OwnerAIController || !OwnerAIController->GetPawn())
+        return false;
+
+    FVector CenterPos = OwnerAIController->GetPawn()->GetActorLocation();
+    float DistanceVariance = 0.0f;
+    float AverageDistance = 0.0f;
+
+    for (const FVector& Pos : CurrentPlayerPattern.RecentPositions) {
+        AverageDistance += FVector::Dist(Pos, CenterPos);
     }
+    AverageDistance /= CurrentPlayerPattern.RecentPositions.Num();
+
+    for (const FVector& Pos : CurrentPlayerPattern.RecentPositions) {
+        float Distance = FVector::Dist(Pos, CenterPos);
+        DistanceVariance += FMath::Abs(Distance - AverageDistance);
+    }
+    DistanceVariance /= CurrentPlayerPattern.RecentPositions.Num();
+
+    return DistanceVariance < 150.0f; // Low variance indicates circular movement
 }
 
-bool UEliteAIIntelligenceComponent::IsPlayerBehaviorConsistent() const
+float UEliteAIIntelligenceComponent::CalculatePredictabilityScore() const
 {
-    return CalculatePatternConfidence() > 0.7f;
+    if (CurrentPlayerPattern.RecentPositions.Num() < 3)
+        return 0.5f;
+
+    float MovementVariance = 0.0f;
+    for (int32 i = 2; i < CurrentPlayerPattern.RecentPositions.Num(); i++) {
+        FVector Move1 = CurrentPlayerPattern.RecentPositions[i - 1] - CurrentPlayerPattern.RecentPositions[i - 2];
+        FVector Move2 = CurrentPlayerPattern.RecentPositions[i] - CurrentPlayerPattern.RecentPositions[i - 1];
+        MovementVariance += FVector::Dist(Move1, Move2);
+    }
+    MovementVariance /= FMath::Max(1, CurrentPlayerPattern.RecentPositions.Num() - 2);
+
+    return FMath::Clamp(1.0f - (MovementVariance / 1000.0f), 0.0f, 1.0f);
 }
 
-float UEliteAIIntelligenceComponent::CalculatePatternConfidence() const
+void UEliteAIIntelligenceComponent::UpdateFrameTiming(float DeltaTime)
 {
-    if (CurrentPlayerPattern.RecentPositions.Num() < 5) {
-        return 0.0f;
+    float FrameTimeMs = DeltaTime * 1000.0f;
+    RecentFrameTimes.Add(FrameTimeMs);
+
+    if (RecentFrameTimes.Num() > 30) {
+        RecentFrameTimes.RemoveAt(0);
     }
 
-    float Confidence = 0.0f;
-
-    // Factor in position consistency
-    if (CurrentPlayerPattern.bPrefersCircleStrafing || CurrentPlayerPattern.bUsesEnvironmentCover) {
-        Confidence += 0.3f;
+    float TotalTime = 0.0f;
+    for (float FrameTime : RecentFrameTimes) {
+        TotalTime += FrameTime;
     }
-
-    // Factor in attack pattern consistency
-    if (CurrentPlayerPattern.AttackPositions.Num() >= 3) {
-        Confidence += 0.3f;
-    }
-
-    // Factor in dodge pattern consistency
-    if (CurrentPlayerPattern.DodgeDirections.Num() >= 3) {
-        Confidence += 0.4f;
-    }
-
-    return FMath::Clamp(Confidence, 0.0f, 1.0f);
+    AverageFrameTime = RecentFrameTimes.Num() > 0 ? TotalTime / RecentFrameTimes.Num() : 16.67f;
 }

@@ -1,4 +1,5 @@
 // Copyright (C) Developed by Pask, Published by Dark Tower Interactive SRL 2024. All Rights Reserved.
+
 using UnrealBuildTool;
 
 public class Portal : ModuleRules
@@ -8,7 +9,9 @@ public class Portal : ModuleRules
         PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
         IncludeOrderVersion = EngineIncludeOrderVersion.Unreal5_5;
 
-        PublicDependencyModuleNames.AddRange(new string[] {
+        // Core UE5 modules
+        PublicDependencyModuleNames.AddRange(new string[]
+        {
             "Core",
             "CoreUObject",
             "Engine",
@@ -16,45 +19,52 @@ public class Portal : ModuleRules
             "EnhancedInput",
             "NavigationSystem",
             "AIModule",
+            "GameplayTasks",
             "UMG",
             "Slate",
             "SlateCore",
-            "GameplayTags",
-            // Multiplayer modules
+            "GameplayTags"
+        });
+
+        // Networking
+        PublicDependencyModuleNames.AddRange(new string[]
+        {
             "OnlineSubsystem",
             "OnlineSubsystemUtils",
             "Sockets",
-            "Networking",
-            // ACF/ARS Dependencies
-            "AscentCoreInterfaces",
+            "Networking"
+        });
+
+        // ACF Ultimate - Core modules only
+        PublicDependencyModuleNames.AddRange(new string[]
+        {
             "AscentCombatFramework",
-            "AscentTargetingSystem",
-            "AdvancedRPGSystem",
+            "AscentCoreInterfaces",
             "AIFramework",
+            "AdvancedRPGSystem",
             "ActionsSystem"
         });
 
-        PrivateDependencyModuleNames.AddRange(new string[] {
+        PrivateDependencyModuleNames.AddRange(new string[]
+        {
             "NetCore",
             "EngineSettings",
             "DeveloperSettings",
             "PacketHandler",
-            "ReliabilityHandlerComponent",
-            "ToolMenus",
-            // Additional ACF modules that might be needed
-            "CollisionsManager",
-            "CharacterController",
-            "MotionWarping"
+            "ReliabilityHandlerComponent"
         });
 
-        // Platform-specific Steam integration
-        if (Target.Platform == UnrealTargetPlatform.Win64)
+        // Platform Steam integration
+        if (Target.Platform == UnrealTargetPlatform.Win64 ||
+            Target.Platform == UnrealTargetPlatform.Linux ||
+            Target.Platform == UnrealTargetPlatform.Mac)
         {
             PublicDependencyModuleNames.Add("OnlineSubsystemSteam");
         }
-        else if (Target.Platform == UnrealTargetPlatform.Linux || Target.Platform == UnrealTargetPlatform.Mac)
-        {
-            PublicDependencyModuleNames.Add("OnlineSubsystemSteam");
-        }
+
+        // UE 5.5 optimizations
+        bUseUnity = true;
+        MinFilesUsingPrecompiledHeaderOverride = 1;
+        bEnableExceptions = false;
     }
 }
