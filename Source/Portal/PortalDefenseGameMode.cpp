@@ -1,5 +1,4 @@
 #include "PortalDefenseGameMode.h"
-#include "AIOverlordManager.h"
 #include "Engine/World.h"
 #include "Kismet/GameplayStatics.h"
 #include "PortalCore.h"
@@ -27,7 +26,6 @@ void APortalDefenseGameMode::BeginPlay()
 
     UE_LOG(LogTemp, Warning, TEXT("PortalDefenseGameMode BeginPlay"));
 
-    AIOverlord = UAIOverlordManager::GetInstance(GetWorld());
     FindPortalCore();
 }
 

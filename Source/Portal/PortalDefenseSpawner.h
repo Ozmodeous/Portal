@@ -7,7 +7,6 @@
 #include "PortalDefenseSpawner.generated.h"
 
 class APortalCore;
-class UAIOverlordManager;
 
 UENUM(BlueprintType)
 enum class ESpawnRingType : uint8 {
@@ -180,9 +179,6 @@ private:
     FTimerHandle SpawnCheckTimer;
     TMap<FGuid, FTimerHandle> RespawnTimers;
 
-    // AI Overlord Integration
-    UPROPERTY()
-    TObjectPtr<UAIOverlordManager> AIOverlord;
 
     // Internal Functions
     void InitializePortalReference();

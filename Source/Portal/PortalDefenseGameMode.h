@@ -7,7 +7,6 @@
 
 class APortalCore;
 class APortalDefenseGameState;
-class UAIOverlordManager;
 class UPortalDefenseSpawner;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnPlayerEnterCaptureZone, APawn*, Player);
@@ -85,10 +84,6 @@ protected:
     // Portal Spawner Reference
     UPROPERTY(BlueprintReadOnly, Category = "Portal")
     TObjectPtr<UPortalDefenseSpawner> PortalSpawner;
-
-    // AI Overlord Integration
-    UPROPERTY(BlueprintReadOnly, Category = "AI Overlord")
-    TObjectPtr<UAIOverlordManager> AIOverlord;
 
     // Capture State
     UPROPERTY(BlueprintReadOnly, Category = "Capture System")

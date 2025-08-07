@@ -1,14 +1,11 @@
 #include "PortalDefenseSpawner.h"
-#include "ACFAIController.h"
-#include "AIOverlordManager.h"
-#include "AIOverseenComponent.h"
+#include "ACFAIController.h" // Fixed include path
 #include "Components/ACFTeamManagerComponent.h"
 #include "Engine/World.h"
 #include "Game/ACFFunctionLibrary.h"
 #include "Kismet/GameplayStatics.h"
 #include "NavigationSystem.h"
 #include "PortalCore.h"
-#include "PortalDefenseAIController.h"
 
 UPortalDefenseSpawner::UPortalDefenseSpawner()
 {
@@ -314,26 +311,6 @@ void UPortalDefenseSpawner::SetupGuardBehavior(APawn* Guard, const FDefenseRingC
         // Set initial target
         FVector InitialTarget = PatrolCenter + FVector(FMath::RandRange(-RingConfig.PatrolRadius, RingConfig.PatrolRadius), FMath::RandRange(-RingConfig.PatrolRadius, RingConfig.PatrolRadius), 0.0f);
         ACFController->SetTargetLocationBK(InitialTarget);
-
-        // Register with overlord
-        if (AIOverlord) {
-            AIOverlord->RegisterAI(ACFController);
-        }
-    }
-
-    // Setup Portal Defense AI Controller
-    if (APortalDefenseAIController* PatrolAI = Cast<APortalDefenseAIController>(Guard->GetController())) {
-        PatrolAI->SetPatrolCenter(PatrolCenter);
-        PatrolAI->SetPatrolRadius(RingConfig.PatrolRadius);
-        PatrolAI->SetPortalTarget(PortalCore);
-        PatrolAI->StartPatrolling();
-    }
-
-    // Setup AI Overseen Component
-    if (UAIOverseenComponent* OverseenComp = Guard->FindComponentByClass<UAIOverseenComponent>()) {
-        OverseenComp->SetPatrolCenter(PatrolCenter);
-        OverseenComp->SetPatrolRadius(RingConfig.PatrolRadius);
-        OverseenComp->SetCombatTeam(ETeam::ETeam2);
     }
 }
 
@@ -368,10 +345,7 @@ void UPortalDefenseSpawner::InitializePortalReference()
 
 void UPortalDefenseSpawner::RegisterWithOverlord()
 {
-    AIOverlord = UAIOverlordManager::GetInstance(GetWorld());
-    if (AIOverlord) {
-        UE_LOG(LogTemp, Log, TEXT("Portal Defense Spawner registered with AI Overlord"));
-    }
+    UE_LOG(LogTemp, Log, TEXT("Portal Defense Spawner - AI Overlord system not available"));
 }
 
 void UPortalDefenseSpawner::CheckForMissingGuards()
@@ -460,11 +434,6 @@ void UPortalDefenseSpawner::OnGuardDestroyed(AActor* DestroyedActor)
                 UE_LOG(LogTemp, Log, TEXT("Guard destroyed at ring %d, position %d"), GuardInfo.RingIndex, GuardInfo.PositionIndex);
                 break;
             }
-        }
-
-        // Notify overlord
-        if (AIOverlord) {
-            AIOverlord->RecordAIDeath(Cast<AACFAIController>(DestroyedGuard->GetController()), DestroyedGuard->GetActorLocation());
         }
     }
 }

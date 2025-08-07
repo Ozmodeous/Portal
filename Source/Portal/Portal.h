@@ -3,6 +3,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Misc/Optional.h" // Add this to fix TOptional incomplete type errors
 
 // Forward declarations for Portal module classes
 class APortalCore;
@@ -10,7 +11,6 @@ class APortalDefenseAIController;
 class APortalDefenseGameMode;
 class APortalDefenseGameState;
 class UPortalInteractionComponent;
-class UAIOverlordManager;
 class UAIOverseenComponent;
 class UPortalStealthConfigDataAsset;
 class UACFStealthDetectionComponent;
